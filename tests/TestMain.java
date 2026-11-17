@@ -9,7 +9,10 @@ import jp.yorukana.ime.UserDictionary;
 import java.util.List;
 
 // よるかな IME 純ロジックの単体テスト (Android非依存クラスのみ)
-// 実行: tests/run-tests.sh  (javac + java、件数を数えて全パスを確認する)
+// 実行: tests/run-tests.sh  (本体は kotlinc でコンパイルし、本ハーネスを
+// javac + java で実行。件数を数えて全パスを確認する)
+
+// ===== 1. テスト本体 =====
 public class TestMain {
     private static int passed = 0;
 
@@ -33,7 +36,7 @@ public class TestMain {
         System.out.println("ALL TESTS PASSED: " + passed + " checks");
     }
 
-    // ----- RomajiConverter -----
+    // ----- 1.1 RomajiConverter -----
     private static void testRomaji() {
         RomajiConverter.Result r;
 
@@ -72,6 +75,11 @@ public class TestMain {
 
         r = RomajiConverter.convert("matcha");
         eq(r.kana, "まっちゃ", "romaji matcha (tch sokuon)");
+
+        // "tch" の途中 "tc" は pending になる (t が素通し表示にならない)
+        r = RomajiConverter.convert("matc");
+        eq(r.kana, "ま", "romaji matc kana");
+        eq(r.pending, "tc", "romaji matc pending tc");
 
         r = RomajiConverter.convert("fa");
         eq(r.kana, "ふぁ", "romaji foreign fa");
@@ -125,7 +133,7 @@ public class TestMain {
         eq(RomajiConverter.convertFully("ko-hi-"), "こーひー", "romaji hyphen is choon");
     }
 
-    // ----- KanaUtils -----
+    // ----- 1.2 KanaUtils -----
     private static void testKanaUtils() {
         eq(KanaUtils.toKatakana("がっこう"), "ガッコウ", "toKatakana gakkou");
         eq(KanaUtils.toKatakana("ぁっゔヶ"), "ァッヴヶ", "toKatakana small/vu/ke");
@@ -172,7 +180,7 @@ public class TestMain {
         check(KanaUtils.nextInRow(9, '〜') == 'わ', "nextInRow wa row wraps");
     }
 
-    // ----- Dictionary / ConversionEngine -----
+    // ----- 1.3 Dictionary / ConversionEngine -----
     private static void testDictionaryAndEngine() {
         Dictionary dict = new Dictionary();
         check(dict.size() >= 600, "dictionary size >= 600 (actual=" + dict.size() + ")");
@@ -185,6 +193,21 @@ public class TestMain {
         check(dict.lookup("たかかった").contains("高かった"), "dict i-adj past");
         check(dict.lookup("しずかな").contains("静かな"), "dict na-adj rentai");
         check(dict.lookup("いった").contains("行った"), "dict iku exception itta");
+        // 減る は五段動詞 (一段に誤分類されていた v1.2.1 修正の回帰テスト)
+        check(dict.lookup("へった").contains("減った"), "dict heru godan ta-form");
+        check(dict.lookup("へらない").contains("減らない"), "dict heru godan nai-form");
+        check(dict.lookup("へれる").contains("減れる"), "dict heru godan potential");
+        check(!dict.lookup("へた").contains("減た"), "dict heru no wrong ichidan ta-form");
+        check(!dict.lookup("へない").contains("減ない"), "dict heru no wrong ichidan nai-form");
+        // 気持ちいい は「良い」の不規則活用 (よくない/よかった) で生成する
+        // (I_ADJ 生成の きもちいくない 等の誤形が出ないことの回帰テスト)
+        check(dict.lookup("きもちいい").contains("気持ちいい"), "dict kimochiii");
+        check(dict.lookup("きもちよくない").contains("気持ちよくない"),
+            "dict kimochiyokunai");
+        check(dict.lookup("きもちよかった").contains("気持ちよかった"),
+            "dict kimochiyokatta");
+        check(!dict.lookup("きもちいくない").contains("気持ちいくない"),
+            "dict no wrong kimochiikunai");
         check(dict.lookup("き").contains("木"), "dict single-kanji fallback ki");
         check(dict.lookup("そら").contains("空"), "dict sora");
         check(dict.has("がっこう") && !dict.has("ああああ"), "dict has");
@@ -221,6 +244,15 @@ public class TestMain {
             .anyMatch(e -> e[0].equals("がっこう") && e[1].equals("学校")),
             "engine predictEntries pair");
 
+        // 前方一致 (二分探索版): prefix より長く prefix で始まる読みだけが返る
+        List<String> withPrefix = dict.readingsWithPrefix("がっ");
+        check(withPrefix.contains("がっこう"), "dict prefix contains gakkou");
+        check(withPrefix.stream().allMatch(k -> k.startsWith("がっ") && k.length() > 2),
+            "dict prefix all match and longer");
+        check(!dict.readingsWithPrefix("がっこう").contains("がっこう"),
+            "dict prefix excludes exact key");
+        check(dict.readingsWithPrefix("").isEmpty(), "dict prefix empty");
+
         // 学習: 頻度が候補順に反映される (はし は初期順 橋,箸,端。箸を学習させる)
         List<String> before = engine.candidates("はし", null);
         check(before.indexOf("橋") >= 0 && before.indexOf("橋") < before.indexOf("箸"),
@@ -236,11 +268,14 @@ public class TestMain {
         check(restored.indexOf("橋") < restored.indexOf("箸"), "learning clear restores order");
     }
 
-    // ----- FlickResolver -----
+    // ----- 1.4 FlickResolver -----
     private static void testFlickResolver() {
         // 方向判定 (しきい値 24px)
         check(FlickResolver.resolveDirection(0, 0, 24) == FlickResolver.DIR_CENTER,
             "flick dir zero is center");
+        // しきい値 0 でも変位ゼロは中央 (左と誤判定しない) — v1.2.1 回帰テスト
+        check(FlickResolver.resolveDirection(0, 0, 0) == FlickResolver.DIR_CENTER,
+            "flick dir zero with zero threshold is center");
         check(FlickResolver.resolveDirection(10, 5, 24) == FlickResolver.DIR_CENTER,
             "flick dir below threshold is center");
         check(FlickResolver.resolveDirection(30, 0, 24) == FlickResolver.DIR_RIGHT,
@@ -305,7 +340,7 @@ public class TestMain {
         check(FlickResolver.ROW_COUNT == 10, "flick row count 10");
     }
 
-    // ----- UserDictionary -----
+    // ----- 1.5 UserDictionary -----
     private static void testUserDictionary() {
         UserDictionary ud = new UserDictionary();
         check(ud.size() == 0 && !ud.has("ねこ"), "userdict empty");

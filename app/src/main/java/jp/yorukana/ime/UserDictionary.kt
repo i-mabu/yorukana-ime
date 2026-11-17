@@ -61,7 +61,7 @@ class UserDictionary {
         map.clear()
     }
 
-    // ----- 永続化形式: "よみ\t単語" を改行で連結 -----
+    // ----- 1.1 永続化形式 ("よみ\t単語" を改行で連結) -----
     fun encode(): String {
         val sb = StringBuilder()
         for (e in entries()) {

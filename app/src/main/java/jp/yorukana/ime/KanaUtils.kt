@@ -28,7 +28,7 @@ object KanaUtils {
         return sb.toString()
     }
 
-    // ----- 1.1b ユーザー辞書の「よみ」検証 -----
+    // ----- 1.2 ユーザー辞書の「よみ」検証 -----
     // よみとして許す文字: ひらがな (ぁ〜ゖ)、長音 ー、々、ゝ、ゞ のみ。
     // 英字・漢字・数字・カタカナ等が混ざっていたら false (空文字列も false)。
     @JvmStatic
@@ -43,7 +43,7 @@ object KanaUtils {
         return true
     }
 
-    // ----- 1.2 濁点・半濁点・小書きトグル -----
+    // ----- 1.3 濁点・半濁点・小書きトグル -----
     // 1文字を次の形へ循環させる。対象外の文字はそのまま返す。
     // 例: か→が→か / は→ば→ぱ→は / つ→づ→っ→つ / あ→ぁ→あ / う→ゔ→ぅ→う
     private val TOGGLE: MutableMap<Char, Char> = HashMap()
@@ -79,7 +79,7 @@ object KanaUtils {
         return TOGGLE.containsKey(c)
     }
 
-    // ----- 1.3 12キー (トグル打ち) の段循環表 -----
+    // ----- 1.4 12キー (トグル打ち) の段循環表 -----
     // 行の先頭文字がキー代表。タップ回数でこの順に循環する。
     @JvmField
     val TOGGLE_ROWS: Array<String> = arrayOf(

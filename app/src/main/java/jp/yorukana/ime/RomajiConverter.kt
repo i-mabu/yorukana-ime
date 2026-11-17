@@ -132,7 +132,9 @@ object RomajiConverter {
             if (matched != null) { out.append(matched); i += mlen; continue@loop }
             // 変換できない位置: 残りがキーの接頭辞なら pending、それ以外は文字を素通し
             val rest = input.substring(i)
-            if (isPossiblePrefix(rest)) { pending = rest; break@loop }
+            // "tch" (促音) の途中 "tc" はテーブルのキーではないが、接頭辞として
+            // pending にする (しないと "matc" の時点で t が素通し表示になる)
+            if (rest == "tc" || isPossiblePrefix(rest)) { pending = rest; break@loop }
             out.append(c); i++
         }
         return Result(out.toString(), pending)

@@ -4,7 +4,7 @@ import kotlin.math.abs
 
 // ===== 1. フリック入力の解決 (純ロジック / Android非依存) =====
 // 12キーの各行について「行＋方向 → 文字」を解決する。
-// 方向は int 定数 (d8 の都合で enum は使わない)。
+// 方向は enum ではなく int 定数で表す。
 // 標準的な日本語フリック配列: 中央=段の1文字目、左=2、上=3、右=4、下=5。
 // や行は左右が空き (未割り当て→中央扱い)、わ行は 左=を 上=ん 右=ー 下=〜。
 object FlickResolver {
@@ -37,6 +37,9 @@ object FlickResolver {
     // 斜めの場合は絶対値の大きい軸を優先する。
     @JvmStatic
     fun resolveDirection(dx: Float, dy: Float, thresholdPx: Float): Int {
+        // 変位ゼロはしきい値が 0 の場合でも必ず中央 (下の軸判定では
+        // dx>0 が偽になり左と誤判定されるため、先に弾く)
+        if (dx == 0f && dy == 0f) return DIR_CENTER
         if (dx * dx + dy * dy < thresholdPx * thresholdPx) return DIR_CENTER
         if (abs(dx) >= abs(dy)) {
             return if (dx > 0) DIR_RIGHT else DIR_LEFT

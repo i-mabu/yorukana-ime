@@ -1,11 +1,24 @@
-# よるかな IME (YoruKana) v1.2.1
+# よるかな IME (YoruKana) v1.3.0
 
 Android用オリジナル日本語IME。完全オフライン・ネットワーク権限なし。
 名前は「終夜（よる）」の世界観から。夜テーマ（濃紺）を既定にした、育つIMEです。
 
 - パッケージ: `jp.yorukana.ime`
-- versionName 1.2.1 / versionCode 7
-- minSdk 26 / targetSdk 34、Kotlin、Gradle/AGPを使わない手動ビルド
+- versionName 1.3.0 / versionCode 11
+- minSdk 26 / targetSdk 34、Kotlin、UI は Jetpack Compose (1.7.6 / Material3)、
+  Gradle/AGPを使わない手動ビルド
+
+## 設計原則（手動型）
+
+yorukana は「自動で変換しない・自動で判定しない」手動型の IME です。全実装共通の原則:
+
+- 変換は Space / 候補タップなどの明示操作でのみ起きる（打っている途中で勝手に漢字にならない）
+- 英語か日本語かを自動で判定しない（英字入力はモード切替による）
+- 確定した文字列を後から自動で直さない
+- 予測・候補は表示まで。確定は必ずユーザーの操作
+- 学習の影響は候補の並び替えまで
+
+詳しくは [MANUAL-INPUT-DESIGN.md](MANUAL-INPUT-DESIGN.md) を参照してください。
 
 ## 機能
 
@@ -29,17 +42,17 @@ Android用オリジナル日本語IME。完全オフライン・ネットワー�
 | 記 | あ | か | さ | ⌫ |
 |---|---|---|---|---|
 | ◀ | た | な | は | ▶ |
-| 😊 | ま | や | ら | 変換 |
-| モード | ゛゜小 | わ | 、。？！ | ⏎ |
+| 😊 | ま | や | ら | ゛゜小 |
+| モード | 、。？！ | わ | 変換 | ⏎ |
 
 - 「記」= 記号モードへ、「😊」= 絵文字ページへ切替。「◀ ▶」= カーソル移動。
 - 「、。？！」キーはタップごとに 、→。→？→！ を循環して入力します。
-- 行4の左右キー（モード／⏎）は少し幅広です。
+- 「゛゜小」は v1.2.4 で行3の右列（かなキーのすぐ右）へ移動。「変換」は行4の広いキーです。
 
 #### フリック配列（v1.1〜）
 タップ=中央、左/上/右/下フリック=その方向の文字。押したキー上に十字プレビューが出て、
 ドラッグ方向の文字がハイライトされ、指を離すと確定します。
-しきい値（24dp）未満で離した場合はタップ扱いで、従来のトグル循環（あ→い→う→え→お）も併用できます。
+しきい値（20dp）未満で離した場合はタップ扱いで、従来のトグル循環（あ→い→う→え→お）も併用できます。
 
 | キー | 中央 | 左 | 上 | 右 | 下 |
 |---|---|---|---|---|---|
@@ -87,18 +100,32 @@ Android用オリジナル日本語IME。完全オフライン・ネットワー�
 3. 文字入力画面でキーボード切替から「よるかな IME」を選ぶ。
 
 ## ビルド方法
-前提: JDK 21（`~/workspace/tools/jdk-21`）、Kotlin コンパイラ 2.4.21
-（公式配布 kotlin-compiler の zip を展開したもの。`~/workspace/tools/kotlin/kotlinc`、
-`bin/kotlinc` と `lib/kotlin-stdlib.jar` を使用。配置先は環境変数 `KOTLIN_HOME`
-でも変更可）と Android SDK（`~/workspace/tools/android/sdk`、
-platforms;android-34、build-tools;34.0.0）。
+前提: JDK 21（`~/workspace/tools/jdk-21`）、Kotlin コンパイラ 2.0.21
+（`~/workspace/tools/kotlin`。Compose コンパイラプラグインはコンパイラの
+バージョンと完全一致が必須のため、本体ビルドは 2.0.21 を使う。
+配置先は環境変数 `KOTLIN_HOME` でも変更可。単体テストは純ロジックのみで、
+tests/run-tests.sh 側の従来指定のまま）と Android SDK
+（`~/workspace/tools/android/sdk`、platforms;android-34、build-tools;34.0.0）、
+および Compose 依存ライブラリ一式（`libs/`、`python3 tools/resolve.py` で
+Google Maven / Maven Central から解決する）。
 
 ワンコマンドで単体テスト → ビルド → 署名まで実行し、最後に成果物のパス・サイズ・sha256 を表示します。
 
 ```sh
-./build-apk.sh        # 単体テスト + aapt2 + kotlinc + d8 (kotlin-stdlib を同梱) + zipalign + apksigner (debug keystore)
+./build-apk.sh        # 単体テスト + aapt2 (アプリ+ライブラリのリソース) + kotlinc
+                      # (+ Compose コンパイラプラグイン) + R8/D8 (マルチ dex)
+                      # + zipalign + apksigner (debug keystore)
 # 成果物: dist/yorukana.apk
 ```
+
+Compose 化に伴う手動パイプラインの要点: Compose コンパイラは Maven 版
+`kotlin-compose-compiler-plugin:2.0.21` を `-Xplugin` で使う（kotlinc 同梱の
+jar は embeddable コンパイラ向けで使えない）。dex 化は build-tools 34 の d8
+ではなく単体 R8 8.7.18 の D8 CLI（`tools/r8-8.7.18.jar`）を使う。
+ライブラリ AAR のリソースは `--auto-add-overlay` + `--extra-packages` で
+リンクし、AAR 内の `.so` は `lib/<abi>/` に同梱する。AAR のマニフェストは
+マージしないため、androidx.startup 等のライブラリ側コンポーネントは
+無効のまま（Compose UI の動作には影響しない）。
 
 リリース署名でビルドする場合（キーストア情報は環境変数でのみ渡し、スクリプトやリポジトリには書きません）:
 
@@ -112,8 +139,8 @@ RELEASE_KEY_ALIAS=... \
 
 ビルドは bash スクリプトです（build.bat はありません）。Windows では WSL 上で実行してください。
 
-v1.2.0 からアプリ本体は Kotlin です。Kotlin 標準ライブラリを dex に
-含めるため、APK サイズは Java 版（約70KB）から約850KB に増えています。
+v1.2.0 からアプリ本体は Kotlin です。v1.3.0 で UI を Jetpack Compose 化した
+ため、APK サイズは約8MB になっています（Compose ランタイム等を同梱）。
 
 検証コマンド例:
 
@@ -128,7 +155,7 @@ FlickResolver / UserDictionary）の単体テスト。
 
 ```sh
 ./tests/run-tests.sh  # kotlinc で本体をコンパイルし、Java ハーネス (TestMain.java) を
-                      # Java 相互運用 (@JvmStatic / @JvmField) 経由で実行、全239件
+                      # Java 相互運用 (@JvmStatic / @JvmField) 経由で実行、全255件
 ```
 
 ## プライバシー
@@ -155,15 +182,20 @@ FlickResolver / UserDictionary）の単体テスト。
 - **v1.1 のフリック入力のタッチ挙動（プレビューの位置・方向判定の体感）は
   特に未検証**です。方向解決ロジック自体は単体テストで確認していますが、
   実機でのしきい値の適否は未確認です。
-- 手動ビルドの d8（R8 8.2.2-dev）が非 static 内部クラスのクラスファイルで
-  NPE を起こすため、削除リピート用 Runnable・フリック用リスナ/プレビュー View は
-  static 内部クラスで実装しています。
+- **v1.3.0 の Compose 化した UI（特にフリックのタッチ挙動・プレビューの
+  位置と体感）は実機未検証**です。タッチ処理のセマンティクス（DOWN での
+  入力、UP 位置での方向再判定、20dp しきい値、プレビューがキーボードを
+  広げないオーバーレイ表示）は View 時代の実装をそのまま写しましたが、
+  実機での確認はこれからです。
+- dex 化は単体 R8 8.7.18 の D8 CLI を使います（build-tools 34 の d8 は
+  匿名内部クラスのクラスファイルで NPE を起こすため）。削除リピート用
+  Runnable は引き続き static 内部クラスで実装しています。
 
 ## 構成
 ```
 app/src/main/java/jp/yorukana/ime/
-  YoruKanaService.kt    IME本体 (InputMethodService、コード生成UI)
-  SettingsActivity.kt   設定画面 (ユーザー辞書の登録 UI 含む)
+  YoruKanaService.kt    IME本体 (InputMethodService、Compose UI をホスト)
+  SettingsActivity.kt   設定画面 (ComponentActivity + Compose、ユーザー辞書 UI 含む)
   RomajiConverter.kt    ローマ字→ひらがな変換 (純ロジック)
   KanaUtils.kt          かな変換・トグル表 (純ロジック)
   FlickResolver.kt      フリック方向判定・行×方向→文字 (純ロジック)
@@ -174,10 +206,49 @@ app/src/main/java/jp/yorukana/ime/
   LearningStore.kt      学習ストア IF / MemoryLearningStore.kt メモリ実装
 app/src/main/res/xml/method.xml  input-method 定義 (ローマ字/かな subtype)
 tests/                    単体テスト
+libs/                     Compose 依存ライブラリ (tools/resolve.py で生成、git 管理外)
+tools/                    依存解決スクリプト + Compose コンパイラプラグイン + R8 jar
 build-apk.sh              手動ビルドスクリプト
 ```
 
 ## バージョン履歴
+- **v1.3.0 (versionCode 11)**: UI を Jetpack Compose に移行。
+  設定画面は ComponentActivity + Compose (Material3、夜/昼テーマは設定と
+  連動して即時切替)。キーボードは InputMethodService に ComposeView を
+  ホストし、全モード (ローマ字/かな/英数/記号・絵文字) と候補バーを
+  Compose で再実装。タッチ挙動は View 時代のセマンティクスを pointerInput
+  で再現した (文字キーは DOWN で入力、長押し 450ms で数字、フリックは
+  20dp しきい値 + UP 位置での方向再判定、プレビューはレイアウトに参加
+  しない固定サイズオーバーレイでキーボードを広げない)。変換エンジン・
+  辞書・学習などのロジックは無変更で、単体テストは全255件パス。
+  あわせてアプリアイコンを新しいアートワークに差し替え (アダプティブ
+  アイコン + レガシー PNG)。手動ビルドは Compose 対応パイプラインに移行
+  (「ビルド方法」参照)。**Compose UI の実機挙動は未検証**。
+- **v1.2.4 (versionCode 10)**: フリック入力の実機報告4件への対応。
+  ①変換が出にくい: 変換キーで行4の広いキーに移し、変換中は候補の文字列を
+  本文の未確定表示にも出す (インライン変換表示) ように変更。候補バーは
+  ハイライト中の候補が見える位置まで自動スクロールする。変換中の削除は
+  変換の取り消しを優先し、モード切替等の先行確定はハイライト中の候補で
+  確定する。②フリックプレビューを 190dp → 152dp に縮小 (ユニット 46→38dp)。
+  ③゛゜小 を行3右列 (かなキーのすぐ右) へ移動し、、。？！ も行4で幅広に。
+  ④連打で次の文字に変わらず確定されてしまう: フリックのしきい値を
+  16dp → 20dp に戻し、連打時の指のブレでタップがフリックに化けるのを抑えた。
+  テスト 255 件。
+- **v1.2.3 (versionCode 9)**: Gboard の APK を解析し、移せる設計を自前実装で反映。
+  Gboard 本体は難読化とネイティブ実装のため内部の数値 (フリック閾値等) は
+  読み取れなかったが、構造として確認できた方式を2つ取り入れた。
+  ①キー間の隙間をマージンではなく背景の内側 (InsetDrawable) で描くよう変更し、
+  隙間がタッチのデッドゾーンにならないようにした (タッチ領域はタイル全面)。
+  ②文字キーにキープレビューを追加: 押した文字をキーの上に大きく表示する
+  (長押し時は数字に切替)。テスト 255 件。
+- **v1.2.2 (versionCode 8)**: 「打ちづらい」への対応として入力処理を見直し。
+  文字キー (ローマ字 / 英数 / かなトグル) をクリック (指が離れた瞬間) ではなく
+  押した瞬間 (ACTION_DOWN) に入力するよう変更し、速打ちでの取りこぼしを解消。
+  フリックは指が離れた位置の座標でも方向を判定し直すようにし、速いフリックが
+  タップ扱いになる問題を修正。あわせてフリックのしきい値を 24dp → 16dp に緩和。
+  候補バーの再描画は内容が同じとき省略し、予測の前方一致検索を二分探索化して
+  打鍵ごとの負荷を軽減。RomajiConverter で "tch" の途中 "tc" が pending に
+  ならず "まt" と表示される問題も修正。テスト 255 件。
 - **v1.2.1 (versionCode 7)**: 全コード精査による辞書データ等の修正。
   五段動詞の「減る」が一段動詞に誤分類され、誤った活用形
   （へない→減ない、へた→減た 等の非語）が候補に出て正しい形

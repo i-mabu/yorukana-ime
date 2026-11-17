@@ -11,3 +11,7 @@ dist/
 # ===== Signing (debug keystore is kept at repo root for a stable signature) =====
 *.keystore
 !debug.keystore
+
+# ===== Compose dependencies (regenerate with tools/resolve.py) =====
+libs/
+tools/*.jar

@@ -2,36 +2,105 @@ package jp.yorukana.ime
 
 import android.content.Context
 import android.content.SharedPreferences
-import android.graphics.Canvas
-import android.graphics.Color
-import android.graphics.Paint
-import android.graphics.drawable.GradientDrawable
+import android.graphics.Color as AndroidColor
 import android.inputmethodservice.InputMethodService
 import android.os.Handler
 import android.os.Looper
 import android.os.VibrationEffect
 import android.os.Vibrator
 import android.text.InputType
-import android.view.Gravity
 import android.view.KeyEvent
-import android.view.MotionEvent
 import android.view.View
 import android.view.inputmethod.EditorInfo
-import android.view.inputmethod.InputConnection
 import android.view.inputmethod.InputMethodManager
-import android.widget.FrameLayout
-import android.widget.HorizontalScrollView
-import android.widget.LinearLayout
-import android.widget.TextView
+import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.ScrollState
+import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.RowScope
+import androidx.compose.foundation.layout.fillMaxHeight
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.offset
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.Text
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.geometry.CornerRadius
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.input.pointer.AwaitPointerEventScope
+import androidx.compose.ui.input.pointer.PointerId
+import androidx.compose.ui.input.pointer.changedToDown
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.layout.LayoutCoordinates
+import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.layout.positionInParent
+import androidx.compose.ui.layout.positionInRoot
+import androidx.compose.ui.platform.ComposeView
+import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.drawText
+import androidx.compose.ui.text.rememberTextMeasurer
+import androidx.compose.ui.unit.IntOffset
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleOwner
+import androidx.lifecycle.LifecycleRegistry
+import androidx.lifecycle.ViewModelStore
+import androidx.lifecycle.ViewModelStoreOwner
+import androidx.lifecycle.setViewTreeLifecycleOwner
+import androidx.lifecycle.setViewTreeViewModelStoreOwner
+import androidx.savedstate.SavedStateRegistry
+import androidx.savedstate.SavedStateRegistryController
+import androidx.savedstate.SavedStateRegistryOwner
+import androidx.savedstate.setViewTreeSavedStateRegistryOwner
 import kotlin.math.max
 
 // ===== 1. よるかな IME 本体 (InputMethodService) =====
 // 入力方式4種: ローマ字QWERTY / かな12キー (フリック・トグル) / 英数QWERTY /
 // 記号・絵文字グリッド。ユーザー辞書対応。
+// UI は Jetpack Compose (入力ビューに ComposeView をホストする)。
+// タッチ処理は View 時代のセマンティクスを pointerInput で再現している:
+//   - 文字キーは押した瞬間 (DOWN) に入力する (クリック完了を待たない)
+//   - かなフリックは DOWN/MOVE/UP の座標から方向を解決し、UP 位置で決め直す
+//   - プレビューはレイアウトに参加しないオーバーレイ表示 (キーボードの高さ
+//     を変えない。v1.1.2 の全画面化バグ対策を Compose でも維持する)
 // composing は setComposingText、確定は commitText を使う。ネットワーク権限なし。
-class YoruKanaService : InputMethodService() {
+class YoruKanaService : InputMethodService(), LifecycleOwner, ViewModelStoreOwner,
+    SavedStateRegistryOwner {
 
-    // テーマ色
+    // ----- 1.1 ComposeView ホスト用のライフサイクル -----
+    // InputMethodService のウィンドウには LifecycleOwner がいないため、
+    // Service 自身をオーナーとして ComposeView に渡す。
+    private val lifecycleRegistry = LifecycleRegistry(this)
+    private val savedStateRegistryController = SavedStateRegistryController.create(this)
+    private val store = ViewModelStore()
+
+    override val lifecycle: Lifecycle
+        get() = lifecycleRegistry
+    override val viewModelStore: ViewModelStore
+        get() = store
+    override val savedStateRegistry: SavedStateRegistry
+        get() = savedStateRegistryController.savedStateRegistry
+
+    // ----- 1.2 テーマ色 -----
     private var colRoot = 0
     private var colKey = 0
     private var colSpecial = 0
@@ -39,29 +108,39 @@ class YoruKanaService : InputMethodService() {
     private var colAccent = 0
     private var colBarBg = 0
 
-    // ----- 1.2 状態 -----
+    private val cRoot: Color get() = Color(colRoot)
+    private val cKey: Color get() = Color(colKey)
+    private val cSpecial: Color get() = Color(colSpecial)
+    private val cText: Color get() = Color(colText)
+    private val cAccent: Color get() = Color(colAccent)
+    private val cBarBg: Color get() = Color(colBarBg)
+
+    // ----- 1.3 状態 -----
     private var dictionary: Dictionary? = null
     private var learning: PrefsLearningStore? = null
     private var engine: ConversionEngine? = null
     private var prefs: SharedPreferences? = null
     private var vibrateOn = true
-    private var night = true
-    private var flickMode = true
+
+    // Compose が購読する状態はスナップショットステートにする
+    private var night by mutableStateOf(true)
+    private var flickMode by mutableStateOf(true)
+    private var mode by mutableStateOf(MODE_ROMAJI)
+    private var symbolPage by mutableStateOf(0) // 0=記号 / 1=絵文字
+    private var caps by mutableStateOf(false)
+    private var currentDisplay by mutableStateOf("")
+    private var candidates by mutableStateOf<List<String>>(emptyList())
+    private var candidateReadings by mutableStateOf<List<String>>(emptyList())
+    private var highlight by mutableStateOf(-1)
+
     private var userDictionary: UserDictionary = UserDictionary()
 
-    private var mode = MODE_ROMAJI
-    private var symbolPage = 0 // 0=記号 / 1=絵文字
     // パスワード欄 / 学習抑制フラグのある入力先では true:
     // 英数モード固定＋学習記録を行わない (onStartInput ごとに判定し直す)
     private var secureSession = false
     private val romajiBuf = StringBuilder()
     private val kanaBuf = StringBuilder()
     private var currentReading = ""
-    private var currentDisplay = ""
-    private var candidates: MutableList<String> = ArrayList()
-    private var candidateReadings: MutableList<String> = ArrayList()
-    private var highlight = -1
-    private var caps = false
 
     // かなトグル打ちの追跡
     private var lastKanaRow = -1
@@ -72,8 +151,8 @@ class YoruKanaService : InputMethodService() {
     private var punctCyclePos = 0
 
     // 削除キー長押しリピート
-    // (static 内部クラスにしているのは、この手動ビルドの d8 が
-    //  非 static 内部クラスのクラスファイルで NPE を起こすため)
+    // (inner class ではなく通常のネストクラスにしているのは、この手動
+    //  ビルドの d8 が inner class のクラスファイルで NPE を起こすため)
     private val repeatHandler = Handler(Looper.getMainLooper())
     private val repeater: Runnable = DeleteRepeater(this)
 
@@ -84,146 +163,36 @@ class YoruKanaService : InputMethodService() {
         }
     }
 
-    // かなキーのフリック操作を受け持つタッチリスナ (static 内部クラス: d8 対策)
-    private class KanaFlickTouchListener(
-        private val service: YoruKanaService,
-        private val rowIdx: Int,
-    ) : View.OnTouchListener {
-        private var downX = 0f
-        private var downY = 0f
-        private var dir = FlickResolver.DIR_CENTER
-        private var active = false
-        private var pointerId = -1 // 追跡中のポインタ (マルチタッチ対策)
+    // ----- 1.4 プレビュー表示状態 (オーバーレイ) -----
+    // フリックプレビュー: 十字配置の中心座標はプレビュー枠 (152dp) 内の
+    // ローカル座標で保持する。枠の位置はルート左上からの px オフセット。
+    private class FlickUiState(
+        val chars: List<String>,
+        val leftPx: Int,
+        val topPx: Int,
+        val cxPx: Float,
+        val cyPx: Float,
+        val dir: Int,
+    )
 
-        // 指が離れたときの確定処理 (ACTION_UP / 対象ポインタの POINTER_UP 共通)
-        private fun finishGesture() {
-            active = false
-            pointerId = -1
-            service.hideFlickPreview()
-            if (dir == FlickResolver.DIR_CENTER) {
-                // タップ扱い: 従来のトグル循環を併用する
-                service.onKanaKey(rowIdx)
-            } else {
-                service.appendKanaFlick(rowIdx, dir)
-            }
-        }
+    private class KeyUiState(
+        val text: String,
+        val leftPx: Int,
+        val topPx: Int,
+    )
 
-        override fun onTouch(v: View, ev: MotionEvent): Boolean {
-            when (ev.actionMasked) {
-                MotionEvent.ACTION_DOWN -> {
-                    service.buzz()
-                    downX = ev.rawX
-                    downY = ev.rawY
-                    dir = FlickResolver.DIR_CENTER
-                    active = true
-                    pointerId = ev.getPointerId(0)
-                    service.showFlickPreview(rowIdx, v)
-                    return true
-                }
-                MotionEvent.ACTION_MOVE -> {
-                    if (!active) return true
-                    dir = FlickResolver.resolveDirection(
-                        ev.rawX - downX, ev.rawY - downY, service.dp(24).toFloat(),
-                    )
-                    service.setFlickDirection(dir)
-                    return true
-                }
-                MotionEvent.ACTION_UP -> {
-                    if (!active) return true
-                    finishGesture()
-                    return true
-                }
-                MotionEvent.ACTION_POINTER_UP -> {
-                    // 追跡中のポインタが離れた場合だけ ACTION_UP 相当として確定する
-                    if (active && ev.getPointerId(ev.actionIndex) == pointerId) {
-                        finishGesture()
-                    }
-                    return true
-                }
-                MotionEvent.ACTION_CANCEL -> {
-                    // キャンセル時は確定せず、プレビュー消去だけを必ず行う
-                    active = false
-                    pointerId = -1
-                    service.hideFlickPreview()
-                    return true
-                }
-                else -> return true
-            }
-        }
-    }
+    private var flickUi by mutableStateOf<FlickUiState?>(null)
+    private var keyUi by mutableStateOf<KeyUiState?>(null)
 
-    // フリックプレビュー (十字配置) を描くオーバーレイ View (static 内部クラス: d8 対策)
-    // PopupWindow は IME で不安定なため、入力ビュー内のオーバーレイで描く。
-    private class FlickPreviewView(ctx: Context) : View(ctx) {
-        private val bgPaint = Paint(Paint.ANTI_ALIAS_FLAG)
-        private val hiPaint = Paint(Paint.ANTI_ALIAS_FLAG)
-        private val textPaint = Paint(Paint.ANTI_ALIAS_FLAG)
-        private var chars: Array<String> = emptyArray()
-        private var dir = FlickResolver.DIR_CENTER
-        private var cx = 0f
-        private var cy = 0f
-        private var unit = 0f
+    // ルート (入力ビュー全体) の幅 px。プレビュー位置のクランプに使う
+    private var rootWidthPx = 0
 
-        init {
-            textPaint.textAlign = Paint.Align.CENTER
-        }
+    // 候補バーのスクロール状態と候補チップの左端座標 (ハイライト追従用)。
+    // View 時代の HorizontalScrollView と同じく、バーが隠れても保持する。
+    private val candScrollState = ScrollState(0)
+    private val candItemLeft: MutableMap<Int, Int> = HashMap()
 
-        fun showPreview(
-            chars: Array<String>, cx: Float, cy: Float, unit: Float,
-            bg: Int, hi: Int, text: Int,
-        ) {
-            this.chars = chars
-            this.cx = cx
-            this.cy = cy
-            this.unit = unit
-            this.dir = FlickResolver.DIR_CENTER
-            bgPaint.color = bg
-            hiPaint.color = hi
-            textPaint.color = text
-            textPaint.textSize = unit * 0.52f
-            invalidate()
-        }
-
-        fun setDirection(dir: Int) {
-            this.dir = dir
-            invalidate()
-        }
-
-        override fun onDraw(canvas: Canvas) {
-            super.onDraw(canvas)
-            if (chars.size < 5 || unit <= 0) return
-            val pad = unit * 0.62f
-            canvas.drawRoundRect(
-                cx - unit - pad, cy - unit - pad,
-                cx + unit + pad, cy + unit + pad, unit * 0.3f, unit * 0.3f, bgPaint,
-            )
-            // DIR_CENTER, LEFT, UP, RIGHT, DOWN の順のオフセット
-            val offs = arrayOf(
-                floatArrayOf(0f, 0f), floatArrayOf(-unit, 0f), floatArrayOf(0f, -unit),
-                floatArrayOf(unit, 0f), floatArrayOf(0f, unit),
-            )
-            for (d in 0 until 5) {
-                val assigned = chars[d].isNotEmpty()
-                if (!assigned) continue // 未割り当て方向 (や行の左右等) は何も描かない
-                val x = cx + offs[d][0]
-                val y = cy + offs[d][1]
-                // ハイライト円は、文字が割り当てられた方向にだけ描く
-                if (d == dir) canvas.drawCircle(x, y, unit * 0.55f, hiPaint)
-                val baseline = y - (textPaint.descent() + textPaint.ascent()) / 2f
-                canvas.drawText(chars[d], x, baseline, textPaint)
-            }
-        }
-    }
-
-    // ----- 1.3 ビュー -----
-    private var rootFrame: FrameLayout? = null
-    private var rootView: LinearLayout? = null
-    private var barBox: LinearLayout? = null
-    private var candidateRow: LinearLayout? = null
-    private var keyboardBox: LinearLayout? = null
-    private var flickPreview: FlickPreviewView? = null
-
-    // ----- 1.4 学習ストア (SharedPreferences 永続化) -----
+    // ----- 1.5 学習ストア (SharedPreferences 永続化) -----
     class PrefsLearningStore(private val prefs: SharedPreferences) : LearningStore {
         private val freq: MutableMap<String, Int> = HashMap()
 
@@ -272,6 +241,8 @@ class YoruKanaService : InputMethodService() {
     // ===== 2. ライフサイクル =====
     override fun onCreate() {
         super.onCreate()
+        savedStateRegistryController.performRestore(null)
+        lifecycleRegistry.currentState = Lifecycle.State.RESUMED
         val p = getSharedPreferences(PREFS, Context.MODE_PRIVATE)
         prefs = p
         val dict = Dictionary()
@@ -287,19 +258,19 @@ class YoruKanaService : InputMethodService() {
         vibrateOn = p.getBoolean(KEY_VIBRATE, true)
         flickMode = "toggle" != p.getString(KEY_KANA_STYLE, "flick")
         if (night) {
-            colRoot = Color.rgb(0x0B, 0x12, 0x26)
-            colBarBg = Color.rgb(0x0B, 0x12, 0x26)
-            colKey = Color.rgb(0x1C, 0x2A, 0x4A)
-            colSpecial = Color.rgb(0x27, 0x35, 0x5C)
-            colText = Color.rgb(0xEA, 0xF0, 0xFF)
-            colAccent = Color.rgb(0x3D, 0x5A, 0xFE)
+            colRoot = AndroidColor.rgb(0x0B, 0x12, 0x26)
+            colBarBg = AndroidColor.rgb(0x0B, 0x12, 0x26)
+            colKey = AndroidColor.rgb(0x1C, 0x2A, 0x4A)
+            colSpecial = AndroidColor.rgb(0x27, 0x35, 0x5C)
+            colText = AndroidColor.rgb(0xEA, 0xF0, 0xFF)
+            colAccent = AndroidColor.rgb(0x3D, 0x5A, 0xFE)
         } else {
-            colRoot = Color.rgb(0xE8, 0xEB, 0xF0)
-            colBarBg = Color.rgb(0xE8, 0xEB, 0xF0)
-            colKey = Color.rgb(0xFF, 0xFF, 0xFF)
-            colSpecial = Color.rgb(0xD5, 0xDB, 0xE8)
-            colText = Color.rgb(0x18, 0x20, 0x38)
-            colAccent = Color.rgb(0x9D, 0xB8, 0xF0)
+            colRoot = AndroidColor.rgb(0xE8, 0xEB, 0xF0)
+            colBarBg = AndroidColor.rgb(0xE8, 0xEB, 0xF0)
+            colKey = AndroidColor.rgb(0xFF, 0xFF, 0xFF)
+            colSpecial = AndroidColor.rgb(0xD5, 0xDB, 0xE8)
+            colText = AndroidColor.rgb(0x18, 0x20, 0x38)
+            colAccent = AndroidColor.rgb(0x9D, 0xB8, 0xF0)
         }
     }
 
@@ -350,14 +321,9 @@ class YoruKanaService : InputMethodService() {
 
     override fun onStartInputView(info: EditorInfo, restarting: Boolean) {
         super.onStartInputView(info, restarting)
+        // テーマ・入力方式などの設定変更はスナップショットステート経由で
+        // 自動的に再コンポジションされる (View 時代の buildKeyboard 相当)
         loadPrefs()
-        val rv = rootView
-        if (rv != null) {
-            rv.setBackgroundColor(colRoot)
-            barBox?.setBackgroundColor(colBarBg)
-            buildKeyboard()
-            renderCandidates()
-        }
     }
 
     // フルスクリーン抽出モード (横向き・一部アプリで入力ビューが画面全体に
@@ -368,70 +334,12 @@ class YoruKanaService : InputMethodService() {
 
     override fun onCreateInputView(): View {
         loadPrefs()
-        val frame = FrameLayout(this)
-        rootFrame = frame
-        val root = LinearLayout(this)
-        rootView = root
-        root.orientation = LinearLayout.VERTICAL
-        root.setBackgroundColor(colRoot)
-        // 高さは内容に合わせる。LayoutParams 未指定 (FrameLayout 既定の
-        // MATCH_PARENT) だと入力ビューがウィンドウ全域に広がる一因になる。
-        frame.addView(
-            root, FrameLayout.LayoutParams(
-                FrameLayout.LayoutParams.MATCH_PARENT,
-                FrameLayout.LayoutParams.WRAP_CONTENT,
-            ),
-        )
-
-        // 候補バー (右端にカーソル ◀ ▶ を固定配置)。
-        // 候補も未確定文字も無いときは renderCandidates() で GONE にして隠す。
-        val bar = LinearLayout(this)
-        barBox = bar
-        bar.orientation = LinearLayout.HORIZONTAL
-        bar.setBackgroundColor(colBarBg)
-        val scroll = HorizontalScrollView(this)
-        scroll.isHorizontalScrollBarEnabled = false
-        val candRow = LinearLayout(this)
-        candidateRow = candRow
-        candRow.orientation = LinearLayout.HORIZONTAL
-        candRow.gravity = Gravity.CENTER_VERTICAL
-        scroll.addView(candRow)
-        bar.addView(scroll, LinearLayout.LayoutParams(0, dp(42), 1f))
-        bar.addView(makeBarCursorButton(true))
-        bar.addView(makeBarCursorButton(false))
-        root.addView(bar)
-
-        // キーボード領域
-        val kb = LinearLayout(this)
-        keyboardBox = kb
-        kb.orientation = LinearLayout.VERTICAL
-        root.addView(kb)
-
-        // フリックプレビュー用オーバーレイ (最前面、通常は非表示)。
-        // 固定サイズ (190dp 四方) で追加し、表示時にキー中心へ位置決めする。
-        // MATCH_PARENT だと VISIBLE 化した瞬間に FrameLayout がウィンドウ
-        // 全域に広がり、キーボードが全画面化してしまう。
-        val preview = FlickPreviewView(this)
-        flickPreview = preview
-        preview.visibility = View.GONE
-        val previewSize = dp(FLICK_PREVIEW_SIZE_DP)
-        frame.addView(preview, FrameLayout.LayoutParams(previewSize, previewSize))
-
-        buildKeyboard()
-        renderCandidates()
-        return frame
-    }
-
-    // 候補バー右端のカーソルボタン
-    private fun makeBarCursorButton(left: Boolean): TextView {
-        val tv = TextView(this)
-        tv.text = if (left) "◀" else "▶"
-        tv.textSize = 13f
-        tv.gravity = Gravity.CENTER
-        tv.setTextColor(colText)
-        tv.layoutParams = LinearLayout.LayoutParams(dp(34), dp(42))
-        tv.setOnClickListener { buzz(); sendCursorKey(left) }
-        return tv
+        val composeView = ComposeView(this)
+        composeView.setViewTreeLifecycleOwner(this)
+        composeView.setViewTreeViewModelStoreOwner(this)
+        composeView.setViewTreeSavedStateRegistryOwner(this)
+        composeView.setContent { KeyboardUi() }
+        return composeView
     }
 
     // InputConnection へ DPAD 左右のキーイベントを送る
@@ -445,64 +353,327 @@ class YoruKanaService : InputMethodService() {
         ic.sendKeyEvent(KeyEvent(KeyEvent.ACTION_UP, code))
     }
 
-    // ===== 3. キーボード構築 (コード生成UI) =====
+    // ===== 3. キーボード UI (Compose) =====
     private fun dp(v: Int): Int {
         return (v * resources.displayMetrics.density + 0.5f).toInt()
     }
 
-    private fun keyBg(color: Int): GradientDrawable {
-        val g = GradientDrawable()
-        g.setColor(color)
-        g.cornerRadius = dp(6).toFloat()
-        return g
+    @Composable
+    private fun KeyboardUi() {
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .background(cRoot)
+                .onGloballyPositioned { rootWidthPx = it.size.width },
+        ) {
+            Column(modifier = Modifier.fillMaxWidth()) {
+                // 候補も未確定文字も無いときは候補バーごと出さない
+                // (View 時代の GONE と同じく、キーボードがその分低くなる)
+                if (candidates.isNotEmpty() || currentDisplay.isNotEmpty()) {
+                    CandidateBar()
+                }
+                when (mode) {
+                    MODE_ROMAJI -> RomajiKeys()
+                    MODE_KANA -> KanaKeys()
+                    MODE_EN -> EnKeys()
+                    MODE_SYMBOL -> SymbolKeys()
+                }
+            }
+            // プレビューはレイアウトに参加しないオーバーレイ (最前面)。
+            // サイズ固定で絶対配置するため、表示してもキーボードは広がらない。
+            FlickPreviewOverlay()
+            KeyPreviewOverlay()
+        }
     }
 
-    private fun makeKey(label: String, weight: Float, special: Boolean, textSize: Int): TextView {
-        return makeKey(label, weight, special, textSize, 48)
+    // ----- 3.1 候補バー -----
+    @Composable
+    private fun CandidateBar() {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(42.dp)
+                .background(cBarBg),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Row(
+                modifier = Modifier
+                    .weight(1f)
+                    .fillMaxHeight()
+                    .horizontalScroll(candScrollState),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                candidates.forEachIndexed { i, cand ->
+                    val idx = i
+                    Box(
+                        modifier = Modifier
+                            .onGloballyPositioned {
+                                candItemLeft[idx] = it.positionInParent().x.toInt()
+                            }
+                            .clickable(
+                                interactionSource = remember { MutableInteractionSource() },
+                                indication = null,
+                            ) { buzz(); commitCandidate(idx) }
+                            .background(
+                                if (idx == highlight) cAccent else Color.Transparent,
+                                RoundedCornerShape(6.dp),
+                            )
+                            .padding(horizontal = 12.dp, vertical = 4.dp),
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        Text(cand, fontSize = 16.sp, color = cText)
+                    }
+                }
+            }
+            BarCursorButton(true)
+            BarCursorButton(false)
+        }
+        // ハイライト中の候補がバーの外にはみ出していたら、見える位置まで
+        // スクロールする (変換キーを押しても選択中の候補が見えないと
+        // 変換している実感が無く、確定できないため)
+        LaunchedEffect(highlight, candidates) {
+            if (highlight >= 0 && highlight < candidates.size) {
+                val left = candItemLeft[highlight]
+                if (left != null) candScrollState.scrollTo(max(0, left - dp(8)))
+            }
+        }
     }
 
-    private fun makeKey(
-        label: String, weight: Float, special: Boolean,
-        textSize: Int, heightDp: Int,
-    ): TextView {
-        val tv = TextView(this)
-        tv.text = label
-        tv.textSize = textSize.toFloat()
-        tv.gravity = Gravity.CENTER
-        tv.setTextColor(colText)
-        tv.background = keyBg(if (special) colSpecial else colKey)
-        val lp = LinearLayout.LayoutParams(0, dp(heightDp), weight)
-        // 左右マージンは 1dp に詰め、キーの実効幅を広げる (打ち間違い対策)。
-        // 上下は 2dp のままにして行間は維持する。
-        lp.setMargins(dp(1), dp(2), dp(1), dp(2))
-        tv.layoutParams = lp
-        return tv
+    // 候補バー右端のカーソルボタン
+    @Composable
+    private fun BarCursorButton(left: Boolean) {
+        Box(
+            modifier = Modifier
+                .width(34.dp)
+                .height(42.dp)
+                .clickable(
+                    interactionSource = remember { MutableInteractionSource() },
+                    indication = null,
+                ) { buzz(); sendCursorKey(left) },
+            contentAlignment = Alignment.Center,
+        ) {
+            Text(if (left) "◀" else "▶", fontSize = 13.sp, color = cText)
+        }
     }
 
-    private fun makeRow(): LinearLayout {
-        val row = LinearLayout(this)
-        row.orientation = LinearLayout.HORIZONTAL
-        row.layoutParams = LinearLayout.LayoutParams(
-            LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT,
-        )
-        keyboardBox?.addView(row)
-        return row
+    // ----- 3.2 キーの見た目 -----
+    // キー同士の隙間はタッチ領域の内側 (背景のインセット) で描く。
+    // タッチ判定は外側の Box 全面に付くため、隙間はデッドゾーンにならない
+    // (View 時代の InsetDrawable 方式と同じ)。
+    @Composable
+    private fun KeyVisual(label: String, textSizeSp: Int, special: Boolean) {
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(horizontal = 1.dp, vertical = 2.dp)
+                .background(
+                    if (special) cSpecial else cKey,
+                    RoundedCornerShape(6.dp),
+                ),
+            contentAlignment = Alignment.Center,
+        ) {
+            Text(label, fontSize = textSizeSp.sp, color = cText)
+        }
     }
 
-    private fun buildKeyboard() {
-        val kb = keyboardBox ?: return
-        kb.removeAllViews()
-        when (mode) {
-            MODE_ROMAJI -> buildRomaji()
-            MODE_KANA -> buildKana()
-            MODE_EN -> buildEn()
-            MODE_SYMBOL -> buildSymbol()
+    // クリック (指が離れた瞬間) で動作するキー。View 時代の
+    // setOnClickListener と同じタイミング。
+    @Composable
+    private fun RowScope.ClickKey(
+        label: String, weight: Float, special: Boolean, textSizeSp: Int,
+        heightDp: Int = 48, onClick: () -> Unit,
+    ) {
+        Box(
+            modifier = Modifier
+                .weight(weight)
+                .height(heightDp.dp)
+                .clickable(
+                    interactionSource = remember { MutableInteractionSource() },
+                    indication = null,
+                ) { buzz(); onClick() },
+        ) {
+            KeyVisual(label, textSizeSp, special)
+        }
+    }
+
+    // 文字キー。押した瞬間 (DOWN) に入力する。速く打ったときに指の滑りで
+    // クリックがキャンセルされ、キーを取りこぼすのを防ぐため
+    // (一般的な IME は押した瞬間に入力する)。
+    // longChar があるキー (QWERTY 最上段) は、短く押したら文字、長押し
+    // (450ms) で longChar (数字) を入力し、離したときの二重入力はしない。
+    @Composable
+    private fun RowScope.LetterKey(ch: String, longChar: String?) {
+        var coords by remember { mutableStateOf<LayoutCoordinates?>(null) }
+        Box(
+            modifier = Modifier
+                .weight(1f)
+                .height(48.dp)
+                .onGloballyPositioned { coords = it }
+                .pointerInput(ch, longChar) {
+                    awaitPointerEventScope {
+                        while (true) {
+                            val first = awaitPointerEvent()
+                            val down = first.changes.firstOrNull { it.changedToDown() }
+                                ?: continue
+                            down.consume()
+                            var longFired = false
+                            val longRunnable: Runnable? = if (longChar != null) {
+                                Runnable {
+                                    longFired = true
+                                    buzz()
+                                    flushComposing()
+                                    commitDirect(longChar)
+                                    // プレビューの表示も数字に切り替える
+                                    coords?.let { showKeyPreview(it, longChar) }
+                                }
+                            } else {
+                                null
+                            }
+                            try {
+                                coords?.let { showKeyPreview(it, ch) }
+                                if (longRunnable != null) {
+                                    repeatHandler.postDelayed(longRunnable, 450)
+                                } else {
+                                    buzz()
+                                    onLetter(ch)
+                                }
+                                waitRelease(down.id)
+                                if (longRunnable != null && !longFired) {
+                                    buzz()
+                                    onLetter(ch)
+                                }
+                            } finally {
+                                // 離した/キャンセルされたらプレビュー消去と
+                                // 長押し予約の解除を必ず行う
+                                hideKeyPreview()
+                                if (longRunnable != null) {
+                                    repeatHandler.removeCallbacks(longRunnable)
+                                }
+                            }
+                        }
+                    }
+                },
+        ) {
+            KeyVisual(ch, 17, false)
+        }
+    }
+
+    // 削除キー。押した瞬間に1文字消し、長押し (400ms〜) で 50ms 間隔の
+    // リピートに入る。離す/キャンセルで必ず止める。
+    @Composable
+    private fun RowScope.DeleteKey(weight: Float, heightDp: Int) {
+        Box(
+            modifier = Modifier
+                .weight(weight)
+                .height(heightDp.dp)
+                .pointerInput(Unit) {
+                    awaitPointerEventScope {
+                        while (true) {
+                            val first = awaitPointerEvent()
+                            val down = first.changes.firstOrNull { it.changedToDown() }
+                                ?: continue
+                            down.consume()
+                            buzz()
+                            doDelete()
+                            repeatHandler.postDelayed(repeater, 400)
+                            try {
+                                waitRelease(down.id)
+                            } finally {
+                                repeatHandler.removeCallbacks(repeater)
+                            }
+                        }
+                    }
+                },
+        ) {
+            KeyVisual("⌫", 17, true)
+        }
+    }
+
+    // かなキー (Gboard 方式配置: 高さ58dp / 22sp)。
+    // フリック/トグルのどちらの方式でも同じ配置・同じ付け方にする。
+    @Composable
+    private fun RowScope.KanaKey(rowIdx: Int) {
+        var coords by remember { mutableStateOf<LayoutCoordinates?>(null) }
+        val flick = flickMode
+        Box(
+            modifier = Modifier
+                .weight(1f)
+                .height(KANA_KEY_HEIGHT_DP.dp)
+                .onGloballyPositioned { coords = it }
+                .pointerInput(rowIdx, flick) {
+                    awaitPointerEventScope {
+                        while (true) {
+                            val first = awaitPointerEvent()
+                            val down = first.changes.firstOrNull { it.changedToDown() }
+                                ?: continue
+                            down.consume()
+                            buzz()
+                            if (!flick) {
+                                // トグル打ち: フリック方式と同じく押した瞬間に入力。
+                                // キャンセル時は後始末が要らないので、そのまま
+                                // ハンドラを抜ける (例外は伝播させる)。
+                                onKanaKey(rowIdx)
+                                waitRelease(down.id)
+                                continue
+                            }
+                            // フリック: DOWN 位置からの変位で方向を解決する。
+                            // 速いフリックでは MOVE が閾値を超える前に指が離れる
+                            // ことがあるため、離れた位置の座標で方向を決め直して
+                            // から確定する (View 時代の ACTION_UP 処理と同じ)。
+                            val downPos = down.position
+                            var dir = FlickResolver.DIR_CENTER
+                            coords?.let { showFlickPreview(rowIdx, it) }
+                            try {
+                                var done = false
+                                while (!done) {
+                                    val ev = awaitPointerEvent()
+                                    val change = ev.changes.firstOrNull { it.id == down.id }
+                                        ?: continue
+                                    change.consume()
+                                    dir = FlickResolver.resolveDirection(
+                                        change.position.x - downPos.x,
+                                        change.position.y - downPos.y,
+                                        dp(20).toFloat(),
+                                    )
+                                    if (change.pressed) {
+                                        setFlickDirection(dir)
+                                    } else {
+                                        hideFlickPreview()
+                                        if (dir == FlickResolver.DIR_CENTER) {
+                                            // タップ扱い: 従来のトグル循環を併用する
+                                            onKanaKey(rowIdx)
+                                        } else {
+                                            appendKanaFlick(rowIdx, dir)
+                                        }
+                                        done = true
+                                    }
+                                }
+                            } finally {
+                                // キャンセル時は確定せず、プレビュー消去だけを必ず行う
+                                hideFlickPreview()
+                            }
+                        }
+                    }
+                },
+        ) {
+            KeyVisual(KanaUtils.TOGGLE_KEY_LABELS[rowIdx], 22, false)
+        }
+    }
+
+    // 追跡中のポインタが離れるまで待つ (他のポインタのイベントは読み捨てる)
+    private suspend fun AwaitPointerEventScope.waitRelease(id: PointerId) {
+        var released = false
+        while (!released) {
+            val ev = awaitPointerEvent()
+            val change = ev.changes.firstOrNull { it.id == id } ?: continue
+            change.consume()
+            if (!change.pressed) released = true
         }
     }
 
     // モードキーのラベルは「現在のモード」ではなく「タップで切り替わる先の
     // モード」を表す (押すと何になるかが一目で分かるようにするため)。
-    // 切替順は addModeKey の (mode + 1) % 4: ローマ字→かな→英数→記号→ローマ字。
+    // 切替順は (mode + 1) % 4: ローマ字→かな→英数→記号→ローマ字。
     private fun modeLabel(): String {
         return when (mode) {
             MODE_ROMAJI -> "あ"   // 次は かな入力
@@ -512,253 +683,247 @@ class YoruKanaService : InputMethodService() {
         }
     }
 
-    private fun letterKey(row: LinearLayout, ch: String): TextView {
-        val k = makeKey(ch, 1f, false, 17)
-        k.setOnClickListener { buzz(); onLetter(ch) }
-        row.addView(k)
-        return k
+    @Composable
+    private fun RowScope.ModeKey(weight: Float, heightDp: Int) {
+        ClickKey(modeLabel(), weight, true, 14, heightDp) { switchMode((mode + 1) % 4) }
     }
 
-    private fun addDeleteKey(row: LinearLayout, weight: Float) {
-        addDeleteKey(row, weight, 48)
-    }
-
-    private fun addDeleteKey(row: LinearLayout, weight: Float, heightDp: Int) {
-        val del = makeKey("⌫", weight, true, 17, heightDp)
-        del.setOnTouchListener { _, ev ->
-            when (ev.actionMasked) {
-                MotionEvent.ACTION_DOWN -> {
-                    buzz()
-                    doDelete()
-                    repeatHandler.postDelayed(repeater, 400)
-                    true
-                }
-                MotionEvent.ACTION_UP,
-                MotionEvent.ACTION_POINTER_UP,
-                MotionEvent.ACTION_CANCEL -> {
-                    // 指が離れた/キャンセルされたらリピートを必ず止める
-                    repeatHandler.removeCallbacks(repeater)
-                    true
-                }
-                else -> true
-            }
-        }
-        row.addView(del)
-    }
-
-    private fun addModeKey(row: LinearLayout, weight: Float) {
-        addModeKey(row, weight, 48)
-    }
-
-    private fun addModeKey(row: LinearLayout, weight: Float, heightDp: Int) {
-        val k = makeKey(modeLabel(), weight, true, 14, heightDp)
-        k.setOnClickListener { buzz(); switchMode((mode + 1) % 4) }
-        row.addView(k)
-    }
-
-    private fun addSpaceKey(row: LinearLayout, weight: Float) {
-        addSpaceKey(row, weight, 48)
-    }
-
-    private fun addSpaceKey(row: LinearLayout, weight: Float, heightDp: Int) {
+    @Composable
+    private fun RowScope.SpaceKey(weight: Float, heightDp: Int) {
         // ラベルは実際の動作と一致させる (英数=スペース、記号=空白、その他=変換)
         val label = if (mode == MODE_EN) "スペース" else if (mode == MODE_SYMBOL) "空白" else "変換"
-        val k = makeKey(label, weight, true, 14, heightDp)
-        k.setOnClickListener { buzz(); onSpace() }
-        row.addView(k)
+        ClickKey(label, weight, true, 14, heightDp) { onSpace() }
     }
 
-    private fun addEnterKey(row: LinearLayout, weight: Float) {
-        val k = makeKey("改行", weight, true, 14)
-        k.setOnClickListener { buzz(); onEnter() }
-        row.addView(k)
+    @Composable
+    private fun RowScope.EnterKey(weight: Float) {
+        ClickKey("改行", weight, true, 14) { onEnter() }
     }
 
-    private fun addCursorKey(row: LinearLayout, left: Boolean) {
-        val k = makeKey(if (left) "←" else "→", 0.8f, true, 15)
-        k.setOnClickListener { buzz(); sendCursorKey(left) }
-        row.addView(k)
+    @Composable
+    private fun RowScope.CursorKey(left: Boolean) {
+        ClickKey(if (left) "←" else "→", 0.8f, true, 15) { sendCursorKey(left) }
     }
 
     // ラベル・幅・高さを指定できるカーソルキー (かな配置の左右列用)
-    private fun addCursorKey(
-        row: LinearLayout, left: Boolean, label: String,
-        weight: Float, heightDp: Int,
+    @Composable
+    private fun RowScope.CursorKey(
+        left: Boolean, label: String, weight: Float, heightDp: Int,
     ) {
-        val k = makeKey(label, weight, true, 15, heightDp)
-        k.setOnClickListener { buzz(); sendCursorKey(left) }
-        row.addView(k)
+        ClickKey(label, weight, true, 15, heightDp) { sendCursorKey(left) }
     }
 
-    // ----- 3.1 ローマ字 QWERTY -----
-    private fun buildRomaji() {
+    // ----- 3.3 ローマ字 QWERTY -----
+    @Composable
+    private fun RomajiKeys() {
         val rows = arrayOf("qwertyuiop", "asdfghjkl", "zxcvbnm")
         for (r in rows.indices) {
-            val row = makeRow()
-            if (r == 2) {
-                val punct = makeKey("、", 0.8f, false, 16)
-                punct.setOnClickListener { buzz(); commitPunct("、") }
-                row.addView(punct)
-            }
-            val chars = rows[r].toCharArray()
-            for (i in chars.indices) {
-                val k = letterKey(row, chars[i].toString())
-                if (r == 0) {
+            Row(modifier = Modifier.fillMaxWidth()) {
+                if (r == 2) {
+                    ClickKey("、", 0.8f, false, 16) { commitPunct("、") }
+                }
+                val chars = rows[r].toCharArray()
+                for (i in chars.indices) {
                     // 最上段は長押しで数字 1〜0 を入力する
-                    val digit = "1234567890"[i].toString()
-                    k.setOnLongClickListener {
-                        buzz()
-                        flushComposing()
-                        commitDirect(digit)
-                        true
-                    }
+                    LetterKey(chars[i].toString(), if (r == 0) "1234567890"[i].toString() else null)
+                }
+                if (r == 2) {
+                    ClickKey("。", 0.8f, false, 16) { commitPunct("。") }
+                    DeleteKey(1.2f, 48)
                 }
             }
-            if (r == 2) {
-                val punct = makeKey("。", 0.8f, false, 16)
-                punct.setOnClickListener { buzz(); commitPunct("。") }
-                row.addView(punct)
-                addDeleteKey(row, 1.2f)
-            }
         }
-        val bottom = makeRow()
-        addModeKey(bottom, 1.1f)
-        addCursorKey(bottom, true)
-        addSpaceKey(bottom, 2.6f)
-        addCursorKey(bottom, false)
-        addEnterKey(bottom, 1.1f)
+        Row(modifier = Modifier.fillMaxWidth()) {
+            ModeKey(1.1f, 48)
+            CursorKey(true)
+            SpaceKey(2.6f, 48)
+            CursorKey(false)
+            EnterKey(1.1f)
+        }
     }
 
-    // ----- 3.2 かな 12キー (フリック / トグル切替、Gboard 方式の5列配置) -----
+    // ----- 3.4 かな 12キー (フリック / トグル切替、Gboard 方式の5列配置) -----
     // 中央3列がかなキー (weight 1 / 高さ58dp / 22sp)、左右に細い
     // ユーティリティ列 (weight 0.75) を置く。全4行:
     // 行1: 記 あ か さ ⌫ / 行2: ◀ た な は ▶ /
-    // 行3: 😊 ま や ら 変換 / 行4: モード ゛゜小 わ 、。？！ ⏎ (左右は weight 1.1)
-    private fun buildKana() {
+    // 行3: 😊 ま や ら ゛゜小 / 行4: モード 、。？！ わ 変換 ⏎
+    // ゛゜小 はかなキーのすぐ右 (行3右列) に置き、打った直後に届きやすくする。
+    // 変換 は行4の広いキー (weight 1.35) にして押しやすくする。
+    @Composable
+    private fun KanaKeys() {
         // 行1: [記] あ か さ [⌫]
-        val row1 = makeRow()
-        val symKey = makeKey("記", 0.75f, true, 15, KANA_KEY_HEIGHT_DP)
-        symKey.setOnClickListener { buzz(); symbolPage = 0; switchMode(MODE_SYMBOL) }
-        row1.addView(symKey)
-        addKanaKey(row1, 0)
-        addKanaKey(row1, 1)
-        addKanaKey(row1, 2)
-        addDeleteKey(row1, 0.75f, KANA_KEY_HEIGHT_DP)
+        Row(modifier = Modifier.fillMaxWidth()) {
+            ClickKey("記", 0.75f, true, 15, KANA_KEY_HEIGHT_DP) {
+                symbolPage = 0
+                switchMode(MODE_SYMBOL)
+            }
+            KanaKey(0)
+            KanaKey(1)
+            KanaKey(2)
+            DeleteKey(0.75f, KANA_KEY_HEIGHT_DP)
+        }
 
         // 行2: [◀] た な は [▶]
-        val row2 = makeRow()
-        addCursorKey(row2, true, "◀", 0.75f, KANA_KEY_HEIGHT_DP)
-        addKanaKey(row2, 3)
-        addKanaKey(row2, 4)
-        addKanaKey(row2, 5)
-        addCursorKey(row2, false, "▶", 0.75f, KANA_KEY_HEIGHT_DP)
-
-        // 行3: [😊] ま や ら [変換]
-        val row3 = makeRow()
-        val emojiKey = makeKey("😊", 0.75f, true, 17, KANA_KEY_HEIGHT_DP)
-        emojiKey.setOnClickListener { buzz(); symbolPage = 1; switchMode(MODE_SYMBOL) }
-        row3.addView(emojiKey)
-        addKanaKey(row3, 6)
-        addKanaKey(row3, 7)
-        addKanaKey(row3, 8)
-        addSpaceKey(row3, 0.75f, KANA_KEY_HEIGHT_DP)
-
-        // 行4: [モード] ゛゜小 わ [、。？！] [⏎] (左右キーは少し幅広)
-        val row4 = makeRow()
-        addModeKey(row4, 1.1f, KANA_KEY_HEIGHT_DP)
-        val dakuten = makeKey("゛゜小", 1f, true, 15, KANA_KEY_HEIGHT_DP)
-        dakuten.setOnClickListener { buzz(); onDakutenKey() }
-        row4.addView(dakuten)
-        addKanaKey(row4, 9) // わ
-        val punctCycle = makeKey("、。？！", 1f, true, 13, KANA_KEY_HEIGHT_DP)
-        punctCycle.setOnClickListener { buzz(); onPunctCycleKey() }
-        row4.addView(punctCycle)
-        val enter = makeKey("⏎", 1.1f, true, 20, KANA_KEY_HEIGHT_DP)
-        enter.setOnClickListener { buzz(); onEnter() }
-        row4.addView(enter)
-    }
-
-    // かなキー (Gboard 方式配置: 高さ58dp / 22sp)。
-    // フリック/トグルのどちらの方式でも同じ配置・同じ付け方にする。
-    private fun addKanaKey(row: LinearLayout, rowIdx: Int) {
-        val k = makeKey(KanaUtils.TOGGLE_KEY_LABELS[rowIdx], 1f, false, 22, KANA_KEY_HEIGHT_DP)
-        if (flickMode) {
-            k.setOnTouchListener(KanaFlickTouchListener(this, rowIdx))
-        } else {
-            k.setOnClickListener { buzz(); onKanaKey(rowIdx) }
+        Row(modifier = Modifier.fillMaxWidth()) {
+            CursorKey(true, "◀", 0.75f, KANA_KEY_HEIGHT_DP)
+            KanaKey(3)
+            KanaKey(4)
+            KanaKey(5)
+            CursorKey(false, "▶", 0.75f, KANA_KEY_HEIGHT_DP)
         }
-        row.addView(k)
+
+        // 行3: [😊] ま や ら [゛゜小] (濁点キーはかなキーのすぐ右に置く)
+        Row(modifier = Modifier.fillMaxWidth()) {
+            ClickKey("😊", 0.75f, true, 17, KANA_KEY_HEIGHT_DP) {
+                symbolPage = 1
+                switchMode(MODE_SYMBOL)
+            }
+            KanaKey(6)
+            KanaKey(7)
+            KanaKey(8)
+            ClickKey("゛゜小", 0.75f, true, 13, KANA_KEY_HEIGHT_DP) { onDakutenKey() }
+        }
+
+        // 行4: [モード] [、。？！] わ [変換] [⏎] (変換は広くして押しやすく)
+        Row(modifier = Modifier.fillMaxWidth()) {
+            ModeKey(1.0f, KANA_KEY_HEIGHT_DP)
+            ClickKey("、。？！", 1.05f, true, 14, KANA_KEY_HEIGHT_DP) { onPunctCycleKey() }
+            KanaKey(9) // わ
+            SpaceKey(1.35f, KANA_KEY_HEIGHT_DP)
+            ClickKey("⏎", 1.0f, true, 20, KANA_KEY_HEIGHT_DP) { onEnter() }
+        }
     }
 
-    // ----- 3.3 英数 QWERTY -----
-    private fun buildEn() {
-        val nums = makeRow()
-        for (c in "1234567890".toCharArray()) letterKey(nums, c.toString())
+    // ----- 3.5 英数 QWERTY -----
+    @Composable
+    private fun EnKeys() {
+        Row(modifier = Modifier.fillMaxWidth()) {
+            for (c in "1234567890".toCharArray()) LetterKey(c.toString(), null)
+        }
         val rows = arrayOf("qwertyuiop", "asdfghjkl", "zxcvbnm")
         for (r in rows.indices) {
-            val row = makeRow()
-            if (r == 2) {
-                val shift = makeKey(if (caps) "⇪" else "⇧", 1.2f, true, 16)
-                shift.setOnClickListener { buzz(); caps = !caps; buildKeyboard() }
-                row.addView(shift)
+            Row(modifier = Modifier.fillMaxWidth()) {
+                if (r == 2) {
+                    ClickKey(if (caps) "⇪" else "⇧", 1.2f, true, 16) { caps = !caps }
+                }
+                for (c in rows[r].toCharArray()) {
+                    LetterKey((if (caps) c.uppercaseChar() else c).toString(), null)
+                }
+                if (r == 2) DeleteKey(1.2f, 48)
             }
-            for (c in rows[r].toCharArray()) {
-                letterKey(row, (if (caps) c.uppercaseChar() else c).toString())
-            }
-            if (r == 2) addDeleteKey(row, 1.2f)
         }
-        val bottom = makeRow()
-        addModeKey(bottom, 1.1f)
-        val comma = makeKey(",", 0.9f, false, 17)
-        comma.setOnClickListener { buzz(); commitDirect(",") }
-        bottom.addView(comma)
-        addSpaceKey(bottom, 2.8f)
-        val period = makeKey(".", 0.9f, false, 17)
-        period.setOnClickListener { buzz(); commitDirect(".") }
-        bottom.addView(period)
-        addEnterKey(bottom, 1.1f)
+        Row(modifier = Modifier.fillMaxWidth()) {
+            ModeKey(1.1f, 48)
+            ClickKey(",", 0.9f, false, 17) { commitDirect(",") }
+            SpaceKey(2.8f, 48)
+            ClickKey(".", 0.9f, false, 17) { commitDirect(".") }
+            EnterKey(1.1f)
+        }
     }
 
-    // ----- 3.4 記号グリッド -----
-    private fun buildSymbol() {
-        // 記号 / 絵文字 の切替タブ
-        val tabs = makeRow()
-        val symTab = makeKey("記号", 1f, symbolPage == 0, 14)
-        symTab.setOnClickListener { buzz(); symbolPage = 0; buildKeyboard() }
-        tabs.addView(symTab)
-        val emojiTab = makeKey("絵文字", 1f, symbolPage == 1, 14)
-        emojiTab.setOnClickListener { buzz(); symbolPage = 1; buildKeyboard() }
-        tabs.addView(emojiTab)
+    // ----- 3.6 記号グリッド -----
+    @Composable
+    private fun SymbolKeys() {
+        // 記号 / 絵文字 の切替タブ (選択中タブが special 色になる)
+        Row(modifier = Modifier.fillMaxWidth()) {
+            ClickKey("記号", 1f, symbolPage == 0, 14) { symbolPage = 0 }
+            ClickKey("絵文字", 1f, symbolPage == 1, 14) { symbolPage = 1 }
+        }
 
         val emoji = symbolPage == 1
         val items = if (emoji) EMOJIS else SYMBOLS
         val cols = if (emoji) 8 else 10
         var i = 0
         while (i < items.size) {
-            val row = makeRow()
             val end = minOf(i + cols, items.size)
-            for (j in i until end) {
-                val s = items[j]
-                val k = makeKey(s, 1f, false, if (emoji) 17 else 15)
-                k.setOnClickListener { buzz(); commitPunct(s) }
-                row.addView(k)
-            }
-            // 最終行が列数に満たない場合は透明スペーサーで埋め、
-            // キーの幅・高さが他行と揃うようにする
-            for (j in end until i + cols) {
-                val spacer = View(this)
-                val lp = LinearLayout.LayoutParams(0, dp(48), 1f)
-                lp.setMargins(dp(1), dp(2), dp(1), dp(2))
-                spacer.layoutParams = lp
-                row.addView(spacer)
+            Row(modifier = Modifier.fillMaxWidth()) {
+                for (j in i until end) {
+                    val s = items[j]
+                    ClickKey(s, 1f, false, if (emoji) 17 else 15) { commitPunct(s) }
+                }
+                // 最終行が列数に満たない場合は透明スペーサーで埋め、
+                // キーの幅・高さが他行と揃うようにする
+                for (j in end until i + cols) {
+                    Box(modifier = Modifier.weight(1f).height(48.dp))
+                }
             }
             i += cols
         }
-        val bottom = makeRow()
-        addModeKey(bottom, 1.1f)
-        addSpaceKey(bottom, 2.8f)
-        addDeleteKey(bottom, 1.2f)
-        addEnterKey(bottom, 1.1f)
+        Row(modifier = Modifier.fillMaxWidth()) {
+            ModeKey(1.1f, 48)
+            SpaceKey(2.8f, 48)
+            DeleteKey(1.2f, 48)
+            EnterKey(1.1f)
+        }
+    }
+
+    // ----- 3.7 プレビュー (オーバーレイ描画) -----
+    // フリックプレビュー (十字配置)。View 時代の FlickPreviewView の
+    // Canvas 描画を Compose Canvas で再現する。
+    @Composable
+    private fun FlickPreviewOverlay() {
+        val ui = flickUi ?: return
+        val textMeasurer = rememberTextMeasurer()
+        Box(
+            modifier = Modifier
+                .offset { IntOffset(ui.leftPx, ui.topPx) }
+                .size(FLICK_PREVIEW_SIZE_DP.dp),
+        ) {
+            Canvas(modifier = Modifier.fillMaxSize()) {
+                val unit = dp(38).toFloat()
+                val pad = unit * 0.62f
+                val cx = ui.cxPx
+                val cy = ui.cyPx
+                drawRoundRect(
+                    color = cSpecial,
+                    topLeft = Offset(cx - unit - pad, cy - unit - pad),
+                    size = Size((unit + pad) * 2, (unit + pad) * 2),
+                    cornerRadius = CornerRadius(unit * 0.3f, unit * 0.3f),
+                )
+                // DIR_CENTER, LEFT, UP, RIGHT, DOWN の順のオフセット
+                val offs = arrayOf(
+                    floatArrayOf(0f, 0f), floatArrayOf(-unit, 0f), floatArrayOf(0f, -unit),
+                    floatArrayOf(unit, 0f), floatArrayOf(0f, unit),
+                )
+                val style = TextStyle(
+                    color = cText,
+                    fontSize = (unit * 0.52f).toSp(),
+                )
+                for (d in 0 until 5) {
+                    val ch = ui.chars.getOrNull(d) ?: ""
+                    if (ch.isEmpty()) continue // 未割り当て方向 (や行の左右等) は描かない
+                    val x = cx + offs[d][0]
+                    val y = cy + offs[d][1]
+                    // ハイライト円は、文字が割り当てられた方向にだけ描く
+                    if (d == ui.dir) {
+                        drawCircle(color = cAccent, radius = unit * 0.55f, center = Offset(x, y))
+                    }
+                    val layout = textMeasurer.measure(ch, style)
+                    drawText(
+                        layout,
+                        topLeft = Offset(
+                            x - layout.size.width / 2f,
+                            y - layout.size.height / 2f,
+                        ),
+                    )
+                }
+            }
+        }
+    }
+
+    // キープレビュー (文字キー用): 押したキーの文字をキーの上に大きく出す
+    @Composable
+    private fun KeyPreviewOverlay() {
+        val ui = keyUi ?: return
+        Box(
+            modifier = Modifier
+                .offset { IntOffset(ui.leftPx, ui.topPx) }
+                .size(KEY_PREVIEW_SIZE_DP.dp)
+                .background(cSpecial, RoundedCornerShape(6.dp)),
+            contentAlignment = Alignment.Center,
+        ) {
+            Text(ui.text, fontSize = 26.sp, color = cText)
+        }
     }
 
     // ===== 4. 入力処理 =====
@@ -836,67 +1001,73 @@ class YoruKanaService : InputMethodService() {
         updateComposing()
     }
 
-    private fun showFlickPreview(rowIdx: Int, key: View) {
-        val preview = flickPreview ?: return
-        val frame = rootFrame ?: return
+    private fun showFlickPreview(rowIdx: Int, coords: LayoutCoordinates) {
         val size = dp(FLICK_PREVIEW_SIZE_DP)
-        val off = offsetInRoot(key)
-        val keyCx = off[0] + key.width / 2
-        val keyCy = off[1] + key.height / 2
+        val pos = coords.positionInRoot()
+        val keyCx = (pos.x + coords.size.width / 2f).toInt()
+        val keyCy = (pos.y + coords.size.height / 2f).toInt()
         // プレビュー (固定サイズ) の中心がキー中心に重なるよう位置決めする。
         // 画面端のキーではみ出す場合は、左端は 0 以上かつルート幅の内側に、
         // 上端は 0 以上にクランプする。
         var left = keyCx - size / 2
         var top = keyCy - size / 2
-        val rootW = frame.width
+        val rootW = rootWidthPx
         if (left < 0) left = 0
         if (rootW > 0 && left + size > rootW) left = max(0, rootW - size)
         if (top < 0) top = 0
-        val lp = preview.layoutParams as FrameLayout.LayoutParams
-        lp.width = size
-        lp.height = size
-        lp.leftMargin = left
-        lp.topMargin = top
-        preview.layoutParams = lp
-        val chars = Array(5) { "" }
+        val chars = ArrayList<String>(5)
         for (d in 0 until 5) {
-            chars[d] = if (FlickResolver.isAssigned(rowIdx, d)) {
-                FlickResolver.charAt(rowIdx, d).toString()
-            } else {
-                ""
-            }
+            chars.add(
+                if (FlickResolver.isAssigned(rowIdx, d)) {
+                    FlickResolver.charAt(rowIdx, d).toString()
+                } else {
+                    ""
+                },
+            )
         }
-        // 描画座標はプレビュー View 内のローカル座標で渡す
-        // (十字の中心 = ビュー内でのキー中心の相対位置)。
-        preview.showPreview(
-            chars, (keyCx - left).toFloat(), (keyCy - top).toFloat(), dp(46).toFloat(),
-            colSpecial, colAccent, colText,
+        // 描画座標はプレビュー枠内のローカル座標で渡す
+        // (十字の中心 = 枠内でのキー中心の相対位置)。
+        flickUi = FlickUiState(
+            chars = chars,
+            leftPx = left,
+            topPx = top,
+            cxPx = (keyCx - left).toFloat(),
+            cyPx = (keyCy - top).toFloat(),
+            dir = FlickResolver.DIR_CENTER,
         )
-        preview.visibility = View.VISIBLE
     }
 
     private fun setFlickDirection(dir: Int) {
-        flickPreview?.setDirection(dir)
+        val ui = flickUi ?: return
+        if (ui.dir != dir) {
+            flickUi = FlickUiState(ui.chars, ui.leftPx, ui.topPx, ui.cxPx, ui.cyPx, dir)
+        }
     }
 
     private fun hideFlickPreview() {
-        flickPreview?.visibility = View.GONE
+        flickUi = null
     }
 
-    // ルート FrameLayout 基準のビュー左上座標を求める
-    private fun offsetInRoot(v: View): IntArray {
-        var x = 0
-        var y = 0
-        var cur: View? = v
-        while (cur != null && cur !== rootFrame) {
-            x += cur.left
-            y += cur.top
-            val parent = cur.parent
-            cur = parent as? View
-        }
-        return intArrayOf(x, y)
+    // 文字キーのキープレビューをキーの真上に表示する (画面端では内側に寄せ、
+    // 上に置けない場合はキーの下に出す)
+    private fun showKeyPreview(coords: LayoutCoordinates, text: String) {
+        val size = dp(KEY_PREVIEW_SIZE_DP)
+        val pos = coords.positionInRoot()
+        val keyCx = (pos.x + coords.size.width / 2f).toInt()
+        var left = keyCx - size / 2
+        if (left < 0) left = 0
+        val rootW = rootWidthPx
+        if (rootW > 0 && left + size > rootW) left = max(0, rootW - size)
+        var top = pos.y.toInt() - size - dp(6)
+        if (top < 0) top = pos.y.toInt() + coords.size.height + dp(6)
+        keyUi = KeyUiState(text, left, top)
     }
 
+    private fun hideKeyPreview() {
+        keyUi = null
+    }
+
+    // ----- 4.2 共通キー処理 (スペース / Enter / 削除 / モード切替) -----
     private fun onSpace() {
         if (mode == MODE_EN || mode == MODE_SYMBOL) {
             commitDirect(" ")
@@ -908,7 +1079,7 @@ class YoruKanaService : InputMethodService() {
         }
         if (candidates.isNotEmpty()) {
             highlight = (highlight + 1) % candidates.size
-            renderCandidates()
+            applyComposingText()
         }
     }
 
@@ -927,7 +1098,6 @@ class YoruKanaService : InputMethodService() {
             }
             ic.commitText(text, 1)
             clearComposingState()
-            renderCandidates()
             return
         }
         val ei = currentInputEditorInfo
@@ -948,6 +1118,12 @@ class YoruKanaService : InputMethodService() {
 
     private fun doDelete() {
         val ic = currentInputConnection ?: return
+        // 変換中 (候補ハイライト中) の削除は、文字を消す前に変換だけを取り消す
+        if (highlight >= 0) {
+            highlight = -1
+            applyComposingText()
+            return
+        }
         if (mode == MODE_ROMAJI && romajiBuf.isNotEmpty()) {
             romajiBuf.deleteCharAt(romajiBuf.length - 1)
             highlight = -1
@@ -967,8 +1143,6 @@ class YoruKanaService : InputMethodService() {
         if (secureSession && newMode != MODE_EN) return
         flushComposing()
         mode = newMode
-        buildKeyboard()
-        renderCandidates()
     }
 
     // ===== 5. composing / 候補 =====
@@ -977,8 +1151,8 @@ class YoruKanaService : InputMethodService() {
         kanaBuf.setLength(0)
         currentReading = ""
         currentDisplay = ""
-        candidates = ArrayList()
-        candidateReadings = ArrayList()
+        candidates = emptyList()
+        candidateReadings = emptyList()
         highlight = -1
         lastKanaRow = -1
     }
@@ -990,6 +1164,12 @@ class YoruKanaService : InputMethodService() {
     }
 
     private fun flushComposing() {
+        // 変換中の候補があれば、その候補で確定する (画面に見えている文字列が
+        // そのまま確定するのが自然なため)
+        if (highlight >= 0 && highlight < candidates.size) {
+            commitCandidate(highlight)
+            return
+        }
         if (currentDisplay.isEmpty()) return
         val ic = currentInputConnection ?: return
         val text = if (mode == MODE_ROMAJI) {
@@ -999,7 +1179,6 @@ class YoruKanaService : InputMethodService() {
         }
         ic.commitText(text, 1)
         clearComposingState()
-        renderCandidates()
     }
 
     private fun commitDirect(s: String) {
@@ -1021,62 +1200,53 @@ class YoruKanaService : InputMethodService() {
         }
         if (currentDisplay.isEmpty()) {
             ic.finishComposingText()
-            candidates = ArrayList()
-            candidateReadings = ArrayList()
+            candidates = emptyList()
+            candidateReadings = emptyList()
         } else {
-            ic.setComposingText(currentDisplay, 1)
             refreshCandidates()
+            applyComposingText()
         }
-        renderCandidates()
+    }
+
+    // composing の表示を更新する。変換中 (候補をハイライト中) は候補の文字列を
+    // 未確定表示にする。本文側でも変換結果が見えるため、候補バーだけを見る
+    // 必要がなくなる。ハイライトが無ければ読み (かな) を表示する。
+    private fun applyComposingText() {
+        val ic = currentInputConnection ?: return
+        val text = if (highlight >= 0 && highlight < candidates.size) {
+            candidates[highlight]
+        } else {
+            currentDisplay
+        }
+        if (text.isEmpty()) ic.finishComposingText() else ic.setComposingText(text, 1)
     }
 
     private fun refreshCandidates() {
-        candidates = ArrayList()
-        candidateReadings = ArrayList()
-        if (currentReading.isEmpty()) return
-        val eng = engine ?: return
-        val raw = if (mode == MODE_ROMAJI) romajiBuf.toString() else null
-        for (c in eng.candidates(currentReading, raw)) {
-            candidates.add(c)
-            candidateReadings.add(currentReading)
-        }
-        // 予測候補を後ろに足す (重複排除)
-        for (e in eng.predictEntries(currentReading, 8)) {
-            if (!candidates.contains(e[1])) {
-                candidates.add(e[1])
-                candidateReadings.add(e[0])
+        val newCandidates = ArrayList<String>()
+        val newReadings = ArrayList<String>()
+        if (currentReading.isNotEmpty()) {
+            val eng = engine
+            if (eng != null) {
+                val raw = if (mode == MODE_ROMAJI) romajiBuf.toString() else null
+                for (c in eng.candidates(currentReading, raw)) {
+                    newCandidates.add(c)
+                    newReadings.add(currentReading)
+                }
+                // 予測候補を後ろに足す (重複排除)
+                for (e in eng.predictEntries(currentReading, 8)) {
+                    if (!newCandidates.contains(e[1])) {
+                        newCandidates.add(e[1])
+                        newReadings.add(e[0])
+                    }
+                }
+                while (newCandidates.size > 24) {
+                    newCandidates.removeAt(newCandidates.size - 1)
+                    newReadings.removeAt(newReadings.size - 1)
+                }
             }
         }
-        while (candidates.size > 24) {
-            candidates.removeAt(candidates.size - 1)
-            candidateReadings.removeAt(candidateReadings.size - 1)
-        }
-    }
-
-    private fun renderCandidates() {
-        val candRow = candidateRow ?: return
-        // 候補が無く未確定文字も無いときは候補バーごと隠し、キーボードを
-        // その分 (42dp) 低くする。バー右端のカーソル ◀ ▶ も一緒に消える。
-        // 候補か未確定文字が現れたら再表示する (状態変化はすべて
-        // updateComposing / 本メソッド経由でここに集まる)。
-        val bar = barBox
-        if (bar != null) {
-            val showBar = candidates.isNotEmpty() || currentDisplay.isNotEmpty()
-            bar.visibility = if (showBar) View.VISIBLE else View.GONE
-        }
-        candRow.removeAllViews()
-        for (i in candidates.indices) {
-            val idx = i
-            val tv = TextView(this)
-            tv.text = candidates[i]
-            tv.textSize = 16f
-            tv.gravity = Gravity.CENTER
-            tv.setTextColor(colText)
-            tv.setPadding(dp(12), dp(4), dp(12), dp(4))
-            if (i == highlight) tv.background = keyBg(colAccent)
-            tv.setOnClickListener { buzz(); commitCandidate(idx) }
-            candRow.addView(tv)
-        }
+        candidates = newCandidates
+        candidateReadings = newReadings
     }
 
     private fun commitCandidate(idx: Int) {
@@ -1093,20 +1263,22 @@ class YoruKanaService : InputMethodService() {
         }
         ic.commitText(text, 1)
         clearComposingState()
-        renderCandidates()
     }
 
+    // ----- 5.1 終了処理 -----
     override fun onFinishInputView(finishingInput: Boolean) {
         super.onFinishInputView(finishingInput)
         // ビューが閉じたら削除リピートとフリックプレビューを残さない
         repeatHandler.removeCallbacks(repeater)
         hideFlickPreview()
+        hideKeyPreview()
     }
 
     override fun onFinishInput() {
         super.onFinishInput()
         repeatHandler.removeCallbacks(repeater)
         hideFlickPreview()
+        hideKeyPreview()
         // 入力先に composing が残らないよう、先に確定してから内部状態を消す
         val ic = currentInputConnection
         ic?.finishComposingText()
@@ -1117,11 +1289,15 @@ class YoruKanaService : InputMethodService() {
         // Handler のコールバックを確実に解除してから破棄する
         repeatHandler.removeCallbacks(repeater)
         hideFlickPreview()
+        hideKeyPreview()
+        lifecycleRegistry.currentState = Lifecycle.State.DESTROYED
+        store.clear()
         super.onDestroy()
     }
 
+    // ===== 6. 定数・データ =====
     companion object {
-        // ----- 1.1 定数・設定 -----
+        // ----- 6.1 定数・設定 -----
         const val PREFS = "yorukana_prefs"
         const val KEY_THEME = "theme"         // "night" / "day"
         const val KEY_VIBRATE = "vibrate"     // boolean
@@ -1135,19 +1311,24 @@ class YoruKanaService : InputMethodService() {
         const val MODE_EN = 2
         const val MODE_SYMBOL = 3
 
-        // フリックプレビュー (オーバーレイ) の一辺のサイズ。MATCH_PARENT にすると
-        // VISIBLE 化した瞬間にキーボード全体が全画面化するため固定サイズにする。
-        private const val FLICK_PREVIEW_SIZE_DP = 190
+        // フリックプレビュー (オーバーレイ) の一辺のサイズ。レイアウトに
+        // 参加させると表示した瞬間にキーボード全体が広がるため、固定サイズ
+        // のオーバーレイとして絶対配置する。
+        private const val FLICK_PREVIEW_SIZE_DP = 152
+
+        // キープレビュー (文字キー) の一辺のサイズ
+        private const val KEY_PREVIEW_SIZE_DP = 52
 
         // かなキーボードのキー高さ (全4行共通)。行ごとに高さが違うと
-        // 不揃いで打ちにくく見えるため、buildKana 内のキーは必ずこの定数を
+        // 不揃いで打ちにくく見えるため、KanaKeys 内のキーは必ずこの定数を
         // 使うこと (行4のキーも含め全行 58dp で統一する)。
         private const val KANA_KEY_HEIGHT_DP = 58
 
         // 句読点循環キー (、。？！) の循環順。
         private val PUNCT_CYCLE: Array<String> = arrayOf("、", "。", "？", "！")
 
-        // 記号グリッド: 全72件 (10列 × 8行、最終行は2件)。buildSymbol の
+        // ----- 6.2 記号・絵文字データ -----
+        // 記号グリッド: 全72件 (10列 × 8行、最終行は2件)。SymbolKeys の
         // ループで全件分のキーを作るため、配列に載せた記号はすべて表示される。
         private val SYMBOLS: Array<String> = arrayOf(
             "、", "。", "！", "？", "・", "：", "；", "（", "）", "「",
@@ -1172,6 +1353,7 @@ class YoruKanaService : InputMethodService() {
             "⏰", "💤", "📷", "🏫",
         )
 
+        // ----- 6.3 パスワード欄判定 -----
         // 入力先がパスワード系フィールドかどうか (クラス別に variation を見る)
         private fun isPasswordField(attribute: EditorInfo): Boolean {
             val type = attribute.inputType

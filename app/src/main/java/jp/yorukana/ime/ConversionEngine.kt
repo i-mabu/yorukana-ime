@@ -124,6 +124,7 @@ class ConversionEngine(
         }
     }
 
+    // ----- 1.3 末尾助詞の分離 -----
     // 分離変換が可能なら語幹を返す (不可なら null)
     private fun splitParticleCandidate(reading: String): String? {
         if (reading.length < 3) return null // 語幹2文字以上を要求

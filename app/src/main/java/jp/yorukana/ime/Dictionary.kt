@@ -8,8 +8,13 @@ class Dictionary {
     private val map: MutableMap<String, MutableList<String>> = LinkedHashMap()
     private val singleKanji: MutableMap<String, List<String>> = HashMap()
 
+    // 読みのソート済み一覧 (予測の前方一致を二分探索で切り出すため。
+    // 打鍵ごとに全読みを走査すると低速端末で引っかかりになる)
+    private var sortedKeys: List<String> = emptyList()
+
     init {
         build()
+        sortedKeys = map.keys.sorted()
     }
 
     // ----- 1.1 構築 -----
@@ -135,12 +140,18 @@ class Dictionary {
         return out
     }
 
-    // 前方一致する読みの一覧 (予測変換用)
+    // 前方一致する読みの一覧 (予測変換用)。ソート済みキーから二分探索で
+    // prefix の範囲を切り出す (結果はソート順で、従来の全走査と同じ集合)。
     fun readingsWithPrefix(prefix: String?): MutableList<String> {
         val out = ArrayList<String>()
         if (prefix.isNullOrEmpty()) return out
-        for (key in map.keys) {
-            if (key.length > prefix.length && key.startsWith(prefix)) out.add(key)
+        var lo = sortedKeys.binarySearch(prefix)
+        if (lo < 0) lo = -lo - 1
+        var i = lo
+        while (i < sortedKeys.size && sortedKeys[i].startsWith(prefix)) {
+            val key = sortedKeys[i]
+            if (key.length > prefix.length) out.add(key)
+            i++
         }
         return out
     }

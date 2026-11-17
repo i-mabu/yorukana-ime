@@ -1,10 +1,10 @@
-# よるかな IME (YoruKana) v1.2.0
+# よるかな IME (YoruKana) v1.2.1
 
 Android用オリジナル日本語IME。完全オフライン・ネットワーク権限なし。
 名前は「終夜（よる）」の世界観から。夜テーマ（濃紺）を既定にした、育つIMEです。
 
 - パッケージ: `jp.yorukana.ime`
-- versionName 1.2.0 / versionCode 6
+- versionName 1.2.1 / versionCode 7
 - minSdk 26 / targetSdk 34、Kotlin、Gradle/AGPを使わない手動ビルド
 
 ## 機能
@@ -60,7 +60,7 @@ Android用オリジナル日本語IME。完全オフライン・ネットワー�
 - 候補順: ⓪ユーザー辞書（最優先） ①辞書の漢字候補（学習頻度でソート）
   ②カタカナ ③ひらがな原文 ④ローマ字原文（重複排除）。
 - 予測候補: 前方一致する辞書語を候補バーの後ろに表示。
-- 内蔵辞書: 読み 3,501 語（明示エントリ＋動詞・形容詞の活用形を生成登録）。
+- 内蔵辞書: 読み 3,502 語（明示エントリ＋動詞・形容詞の活用形を生成登録）。
   日常語（挨拶・時間・学校・天気・家族・食べ物・地名・IT用語 等）を幅広く収録。
   単漢字フォールバック付き。
 - **学習機能**: 確定した候補の頻度を端末内（SharedPreferences）に記録し、次回から上位表示。
@@ -93,10 +93,24 @@ Android用オリジナル日本語IME。完全オフライン・ネットワー�
 でも変更可）と Android SDK（`~/workspace/tools/android/sdk`、
 platforms;android-34、build-tools;34.0.0）。
 
+ワンコマンドで単体テスト → ビルド → 署名まで実行し、最後に成果物のパス・サイズ・sha256 を表示します。
+
 ```sh
-./build-apk.sh        # aapt2 + kotlinc + d8 (kotlin-stdlib を同梱) + zipalign + apksigner (debug keystore)
+./build-apk.sh        # 単体テスト + aapt2 + kotlinc + d8 (kotlin-stdlib を同梱) + zipalign + apksigner (debug keystore)
 # 成果物: dist/yorukana.apk
 ```
+
+リリース署名でビルドする場合（キーストア情報は環境変数でのみ渡し、スクリプトやリポジトリには書きません）:
+
+```sh
+RELEASE_KEYSTORE=/path/to/release.keystore \
+RELEASE_KEYSTORE_PASS=... \
+RELEASE_KEY_ALIAS=... \
+./build-apk.sh release
+# 成果物: dist/yorukana-release.apk
+```
+
+ビルドは bash スクリプトです（build.bat はありません）。Windows では WSL 上で実行してください。
 
 v1.2.0 からアプリ本体は Kotlin です。Kotlin 標準ライブラリを dex に
 含めるため、APK サイズは Java 版（約70KB）から約850KB に増えています。
@@ -164,6 +178,16 @@ build-apk.sh              手動ビルドスクリプト
 ```
 
 ## バージョン履歴
+- **v1.2.1 (versionCode 7)**: 全コード精査による辞書データ等の修正。
+  五段動詞の「減る」が一段動詞に誤分類され、誤った活用形
+  （へない→減ない、へた→減た 等の非語）が候補に出て正しい形
+  （減った/減らない/減れる 等）が出なかった問題を修正。
+  「気持ちいい」も I_ADJ の規則生成では「気持ちいくない」等の誤形に
+  なるため生成対象から外し、「良い」の不規則活用（気持ちよくない/
+  気持ちよかった 等）を明示エントリで登録。あわせて
+  FlickResolver の方向判定で、しきい値 0 かつ変位ゼロのときに
+  左と誤判定する境界ケースを修正。辞書の読み総数は 3,501 → 3,502 に。
+  回帰テストを追加し単体テストは全249件パス。
 - **v1.2.0 (versionCode 6)**: アプリ本体の全ソースを Java から Kotlin へ
   書き換え（Kotlin 2.4.21、手動ビルドは kotlinc + d8 に移行し、
   kotlin-stdlib を APK に同梱）。**機能・挙動・画面構成は v1.1.3 と同一で、

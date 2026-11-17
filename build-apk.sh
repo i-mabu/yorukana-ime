@@ -1,17 +1,24 @@
 #!/usr/bin/env bash
-# よるかな IME - オフライン手動ビルド (Gradle/AGPを使わず aapt2 + javac + d8 でAPKを作る)
-# 必要: JDK 21 (~/workspace/tools/jdk-21) と Android SDK (platforms;android-34, build-tools;34.0.0)
+# よるかな IME - オフライン手動ビルド (Gradle/AGPを使わず aapt2 + kotlinc + d8 でAPKを作る)
+# 必要: JDK 21 (~/workspace/tools/jdk-21)、Kotlin コンパイラ
+#       (~/workspace/tools/kotlin/kotlinc)、Android SDK (platforms;android-34, build-tools;34.0.0)
 set -euo pipefail
 cd "$(dirname "$0")"
 export LANG="${LANG:-C.UTF-8}" LC_ALL="${LC_ALL:-C.UTF-8}"
 export JAVA_HOME="${JAVA_HOME:-$HOME/workspace/tools/jdk-21}"
-export PATH="$JAVA_HOME/bin:$PATH" # d8 等が java を PATH から探すため
+export PATH="$JAVA_HOME/bin:$PATH" # d8 / kotlinc 等が java を PATH から探すため
 
 SDK="${ANDROID_SDK_ROOT:-${ANDROID_HOME:-$HOME/workspace/tools/android/sdk}}"
 BT="$SDK/build-tools/34.0.0"
 AJAR="$SDK/platforms/android-34/android.jar"
 [ -f "$AJAR" ] || { echo "android.jar が見つかりません: $AJAR" >&2; exit 1; }
 [ -x "$BT/aapt2" ] || { echo "aapt2 が見つかりません: $BT" >&2; exit 1; }
+
+KOTLINC_HOME="${KOTLIN_HOME:-$HOME/workspace/tools/kotlin/kotlinc}"
+KOTLINC="$KOTLINC_HOME/bin/kotlinc"
+STDLIB="$KOTLINC_HOME/lib/kotlin-stdlib.jar"
+[ -x "$KOTLINC" ] || { echo "kotlinc が見つかりません: $KOTLINC" >&2; exit 1; }
+[ -f "$STDLIB" ] || { echo "kotlin-stdlib.jar が見つかりません: $STDLIB" >&2; exit 1; }
 
 JAVA_BIN="${JAVA_HOME:+$JAVA_HOME/bin/}"
 JAVAC="${JAVA_BIN}javac"; KEYTOOL="${JAVA_BIN}keytool"
@@ -33,12 +40,17 @@ sed 's|<manifest xmlns:android="http://schemas.android.com/apk/res/android"|<man
   --manifest "$BUILD/AndroidManifest.xml" "$BUILD/compiled.zip" \
   --java "$BUILD/gen" --min-sdk-version 26 --target-sdk-version 34
 
-echo "[3/6] javac"
-find app/src/main/java "$BUILD/gen" -name '*.java' > "$BUILD/sources.txt"
-"$JAVAC" --release 17 -encoding UTF-8 -cp "$AJAR" -d "$BUILD/classes" @"$BUILD/sources.txt"
+echo "[3/6] kotlinc (+ javac for generated R.java)"
+find app/src/main/java -name '*.kt' > "$BUILD/sources.txt"
+"$KOTLINC" -cp "$AJAR" -d "$BUILD/classes" @"$BUILD/sources.txt"
+find "$BUILD/gen" -name '*.java' > "$BUILD/r-sources.txt"
+if [ -s "$BUILD/r-sources.txt" ]; then
+  "$JAVAC" --release 17 -encoding UTF-8 -cp "$AJAR" -d "$BUILD/classes" @"$BUILD/r-sources.txt"
+fi
 
-echo "[4/6] d8"
-"$BT/d8" --min-api 26 --output "$BUILD/dex" $(find "$BUILD/classes" -name '*.class')
+echo "[4/6] d8 (app classes + kotlin-stdlib)"
+"$BT/d8" --min-api 26 --output "$BUILD/dex" \
+  $(find "$BUILD/classes" -name '*.class') "$STDLIB"
 
 echo "[5/6] package + zipalign"
 cp "$BUILD/app-unsigned.apk" "$BUILD/app-with-dex.apk"

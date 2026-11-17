@@ -6,10 +6,12 @@
         android:icon="@mipmap/ic_launcher"
         android:label="@string/subtype_romaji"
         android:imeSubtypeLocale="ja_JP"
-        android:imeSubtypeMode="keyboard" />
+        android:imeSubtypeMode="keyboard"
+        android:imeSubtypeExtraValue="mode=romaji" />
     <subtype
         android:icon="@mipmap/ic_launcher"
         android:label="@string/subtype_kana"
         android:imeSubtypeLocale="ja_JP"
-        android:imeSubtypeMode="keyboard" />
+        android:imeSubtypeMode="keyboard"
+        android:imeSubtypeExtraValue="mode=kana" />
 </input-method>

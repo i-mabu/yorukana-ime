@@ -1,8 +1,10 @@
 import jp.yorukana.ime.ConversionEngine;
 import jp.yorukana.ime.Dictionary;
+import jp.yorukana.ime.FlickResolver;
 import jp.yorukana.ime.KanaUtils;
 import jp.yorukana.ime.MemoryLearningStore;
 import jp.yorukana.ime.RomajiConverter;
+import jp.yorukana.ime.UserDictionary;
 
 import java.util.List;
 
@@ -26,6 +28,8 @@ public class TestMain {
         testRomaji();
         testKanaUtils();
         testDictionaryAndEngine();
+        testFlickResolver();
+        testUserDictionary();
         System.out.println("ALL TESTS PASSED: " + passed + " checks");
     }
 
@@ -84,6 +88,15 @@ public class TestMain {
         eq(r.kana, "っ", "romaji ltu");
         r = RomajiConverter.convert("axtu");
         eq(r.kana, "あっ", "romaji axtu");
+        // 4文字キー xtsu / ltsu (最長一致の上限を 4 にした v1.1.1 の回帰テスト)
+        r = RomajiConverter.convert("xtsu");
+        eq(r.kana, "っ", "romaji xtsu");
+        eq(r.pending, "", "romaji xtsu pending");
+        r = RomajiConverter.convert("ltsu");
+        eq(r.kana, "っ", "romaji ltsu");
+        eq(RomajiConverter.convertFully("axtsu"), "あっ", "romaji axtsu fully");
+        eq(RomajiConverter.convertFully("konnichiha"), "こんにちは",
+            "romaji konnichiha unaffected by 4-char match");
 
         r = RomajiConverter.convert("k");
         eq(r.kana, "", "romaji k kana empty");
@@ -140,6 +153,19 @@ public class TestMain {
         check(KanaUtils.rowIndexOf('き') == 1, "rowIndexOf ki");
         check(KanaUtils.rowIndexOf('ん') == 9, "rowIndexOf n");
         check(KanaUtils.rowIndexOf('x') == -1, "rowIndexOf none");
+
+        // ユーザー辞書のよみ検証 (v1.1.1)
+        check(KanaUtils.isValidReading("よるかな"), "validReading hiragana");
+        check(KanaUtils.isValidReading("こーひー"), "validReading choon ok");
+        check(KanaUtils.isValidReading("ひとびと"), "validReading plain ok");
+        check(KanaUtils.isValidReading("とうきょう"), "validReading youon ok");
+        check(!KanaUtils.isValidReading(""), "validReading empty ng");
+        check(!KanaUtils.isValidReading(null), "validReading null ng");
+        check(!KanaUtils.isValidReading("yoru"), "validReading alphabet ng");
+        check(!KanaUtils.isValidReading("夜"), "validReading kanji ng");
+        check(!KanaUtils.isValidReading("よる1"), "validReading digit ng");
+        check(!KanaUtils.isValidReading("ヨルカナ"), "validReading katakana ng");
+
         check(KanaUtils.nextInRow(0, 'あ') == 'い', "nextInRow a->i");
         check(KanaUtils.nextInRow(0, 'お') == 'あ', "nextInRow o wraps to a");
         check(KanaUtils.nextInRow(7, 'よ') == 'や', "nextInRow yo wraps to ya");
@@ -208,5 +234,138 @@ public class TestMain {
         check(learning.getFrequency("はし", "箸") == 0, "learning clear");
         List<String> restored = engine.candidates("はし", null);
         check(restored.indexOf("橋") < restored.indexOf("箸"), "learning clear restores order");
+    }
+
+    // ----- FlickResolver -----
+    private static void testFlickResolver() {
+        // 方向判定 (しきい値 24px)
+        check(FlickResolver.resolveDirection(0, 0, 24) == FlickResolver.DIR_CENTER,
+            "flick dir zero is center");
+        check(FlickResolver.resolveDirection(10, 5, 24) == FlickResolver.DIR_CENTER,
+            "flick dir below threshold is center");
+        check(FlickResolver.resolveDirection(30, 0, 24) == FlickResolver.DIR_RIGHT,
+            "flick dir right");
+        check(FlickResolver.resolveDirection(-30, 0, 24) == FlickResolver.DIR_LEFT,
+            "flick dir left");
+        check(FlickResolver.resolveDirection(0, 30, 24) == FlickResolver.DIR_DOWN,
+            "flick dir down (dy positive)");
+        check(FlickResolver.resolveDirection(0, -30, 24) == FlickResolver.DIR_UP,
+            "flick dir up (dy negative)");
+        check(FlickResolver.resolveDirection(30, 20, 24) == FlickResolver.DIR_RIGHT,
+            "flick dir diagonal dominant x");
+        check(FlickResolver.resolveDirection(20, 30, 24) == FlickResolver.DIR_DOWN,
+            "flick dir diagonal dominant y");
+        check(FlickResolver.resolveDirection(-30, -40, 24) == FlickResolver.DIR_UP,
+            "flick dir diagonal up-left is up");
+
+        // 標準行 (あ・か・さ・た・な・は・ま・ら) は 中央/左/上/右/下 = 段の1〜5文字目
+        String[] standardRows = {
+            "あいうえお", "かきくけこ", "さしすせそ", "たちつてと",
+            "なにぬねの", "はひふへほ", "まみむめも", null, "らりるれろ",
+        };
+        int[] dirs = {FlickResolver.DIR_CENTER, FlickResolver.DIR_LEFT,
+            FlickResolver.DIR_UP, FlickResolver.DIR_RIGHT, FlickResolver.DIR_DOWN};
+        for (int row = 0; row < standardRows.length; row++) {
+            if (standardRows[row] == null) continue;
+            for (int d = 0; d < 5; d++) {
+                check(FlickResolver.charAt(row, dirs[d]) == standardRows[row].charAt(d),
+                    "flick char row=" + row + " dir=" + d);
+                check(FlickResolver.isAssigned(row, dirs[d]),
+                    "flick assigned row=" + row + " dir=" + d);
+            }
+        }
+
+        // や行 (row=7): 中央=や 上=ゆ 下=よ、左右は未割り当て→中央にフォールバック
+        check(FlickResolver.charAt(7, FlickResolver.DIR_CENTER) == 'や', "flick ya center");
+        check(FlickResolver.charAt(7, FlickResolver.DIR_UP) == 'ゆ', "flick ya up is yu");
+        check(FlickResolver.charAt(7, FlickResolver.DIR_DOWN) == 'よ', "flick ya down is yo");
+        check(FlickResolver.charAt(7, FlickResolver.DIR_LEFT) == 'や',
+            "flick ya left falls back to center");
+        check(FlickResolver.charAt(7, FlickResolver.DIR_RIGHT) == 'や',
+            "flick ya right falls back to center");
+        check(!FlickResolver.isAssigned(7, FlickResolver.DIR_LEFT)
+            && !FlickResolver.isAssigned(7, FlickResolver.DIR_RIGHT),
+            "flick ya left/right unassigned");
+        check(FlickResolver.isAssigned(7, FlickResolver.DIR_UP)
+            && FlickResolver.isAssigned(7, FlickResolver.DIR_DOWN),
+            "flick ya up/down assigned");
+
+        // わ行 (row=9): 中央=わ 左=を 上=ん 右=ー 下=〜
+        check(FlickResolver.charAt(9, FlickResolver.DIR_CENTER) == 'わ', "flick wa center");
+        check(FlickResolver.charAt(9, FlickResolver.DIR_LEFT) == 'を', "flick wa left is wo");
+        check(FlickResolver.charAt(9, FlickResolver.DIR_UP) == 'ん', "flick wa up is n");
+        check(FlickResolver.charAt(9, FlickResolver.DIR_RIGHT) == 'ー', "flick wa right is choon");
+        check(FlickResolver.charAt(9, FlickResolver.DIR_DOWN) == '〜', "flick wa down is nami");
+
+        // 範囲外
+        check(FlickResolver.charAt(-1, FlickResolver.DIR_CENTER) == '\0', "flick row -1 is nul");
+        check(FlickResolver.charAt(10, FlickResolver.DIR_CENTER) == '\0', "flick row 10 is nul");
+        check(!FlickResolver.isAssigned(10, FlickResolver.DIR_CENTER),
+            "flick row 10 unassigned");
+        check(FlickResolver.ROW_COUNT == 10, "flick row count 10");
+    }
+
+    // ----- UserDictionary -----
+    private static void testUserDictionary() {
+        UserDictionary ud = new UserDictionary();
+        check(ud.size() == 0 && !ud.has("ねこ"), "userdict empty");
+        ud.add("ねこ", "猫又");
+        ud.add("ねこ", "ネコチャン");
+        ud.add("よるかな", "夜奏");
+        ud.add("ねこ", "猫又"); // 重複は無視
+        check(ud.size() == 3, "userdict size 3 (dup ignored)");
+        check(ud.lookup("ねこ").equals(List.of("猫又", "ネコチャン")),
+            "userdict lookup keeps order");
+        check(ud.lookup("いぬ").isEmpty(), "userdict lookup missing is empty");
+        ud.add("", "単語");
+        ud.add("よみ", "");
+        check(ud.size() == 3, "userdict ignores empty reading/word");
+
+        // encode / decode 往復
+        UserDictionary restored = UserDictionary.decode(ud.encode());
+        check(restored.size() == 3, "userdict encode/decode size");
+        check(restored.lookup("よるかな").equals(List.of("夜奏")),
+            "userdict encode/decode content");
+        check(UserDictionary.decode("").size() == 0, "userdict decode empty");
+        check(UserDictionary.decode(null).size() == 0, "userdict decode null");
+
+        // 削除
+        check(ud.remove("ねこ", "猫又"), "userdict remove returns true");
+        check(ud.lookup("ねこ").equals(List.of("ネコチャン")), "userdict after remove");
+        check(!ud.remove("ねこ", "猫又"), "userdict remove missing returns false");
+        check(ud.remove("ねこ", "ネコチャン") && !ud.has("ねこ"),
+            "userdict reading removed when last word deleted");
+
+        // 変換候補での優先順位: ユーザー辞書 > 学習 > 内蔵辞書
+        Dictionary dict = new Dictionary();
+        MemoryLearningStore learning = new MemoryLearningStore();
+        UserDictionary user = new UserDictionary();
+        user.add("はし", "マイ箸");
+        user.add("よるかな", "夜奏");
+        ConversionEngine engine = new ConversionEngine(dict, learning, user);
+
+        // 学習で「箸」を強く学習させても、ユーザー辞書が先頭
+        for (int i = 0; i < 5; i++) learning.recordSelection("はし", "箸");
+        List<String> cands = engine.candidates("はし", null);
+        check(cands.get(0).equals("マイ箸"), "userdict beats learning");
+        check(cands.indexOf("マイ箸") < cands.indexOf("箸"), "userdict before learned word");
+
+        // 内蔵辞書に無い読みでもユーザー辞書だけで候補が出る
+        List<String> only = engine.candidates("よるかな", null);
+        check(only.get(0).equals("夜奏"), "userdict-only reading candidate");
+
+        // ユーザー単語が内蔵候補と重なる場合は重複しない (あめ→雨 は内蔵にもある)
+        user.add("あめ", "雨");
+        List<String> ame = engine.candidates("あめ", null);
+        check(ame.get(0).equals("雨") && ame.stream().filter("雨"::equals).count() == 1,
+            "userdict dedup with builtin");
+
+        // setter での差し替え (IME が入力開始時に読み込む経路)
+        ConversionEngine engine2 = new ConversionEngine(dict, learning);
+        check(engine2.candidates("よるかな", null).get(0).equals("ヨルカナ"),
+            "engine without userdict falls back to katakana");
+        engine2.setUserDictionary(user);
+        check(engine2.candidates("よるかな", null).get(0).equals("夜奏"),
+            "engine setUserDictionary takes effect");
     }
 }

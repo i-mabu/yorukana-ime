@@ -24,6 +24,11 @@ jobs:
         with:
           distribution: temurin
           java-version: '21'
+      - name: Install Kotlin compiler 2.4.21
+        run: |
+          curl -sL -o /tmp/kotlin-compiler.zip https://github.com/JetBrains/kotlin/releases/download/v2.4.21/kotlin-compiler-2.4.21.zip
+          unzip -q /tmp/kotlin-compiler.zip -d "$RUNNER_TEMP/kotlin"
+          echo "KOTLIN_HOME=$RUNNER_TEMP/kotlin/kotlinc" >> "$GITHUB_ENV"
       - name: Run unit tests (pure logic, no network)
         run: |
           chmod +x tests/run-tests.sh build-apk.sh

@@ -40,6 +40,17 @@ class UserDictionary {
         return map.containsKey(reading)
     }
 
+    // prefix で始まる (prefix より長い) 登録済みよみの一覧 (予測候補用、登録順)。
+    // ユーザー辞書は小さい前提で全件走査する。
+    fun readingsWithPrefix(prefix: String?): List<String> {
+        val out = ArrayList<String>()
+        if (prefix.isNullOrEmpty()) return out
+        for (key in map.keys) {
+            if (key.length > prefix.length && key.startsWith(prefix)) out.add(key)
+        }
+        return out
+    }
+
     // (よみ, 単語) ペアの一覧を登録順に返す (設定画面の一覧表示用)。
     fun entries(): List<Array<String>> {
         val out = ArrayList<Array<String>>()

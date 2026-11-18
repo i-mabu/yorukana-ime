@@ -188,7 +188,7 @@ public class TestMain {
     // ----- 1.3 Dictionary / ConversionEngine -----
     private static void testDictionaryAndEngine() {
         Dictionary dict = new Dictionary();
-        check(dict.size() == 3408, "dictionary size == 3408 (actual=" + dict.size() + ")");
+        check(dict.size() == 3410, "dictionary size == 3410 (actual=" + dict.size() + ")");
         check(dict.lookup("がっこう").contains("学校"), "dict gakkou -> 学校");
         check(dict.lookup("せんせい").contains("先生"), "dict sensei -> 先生");
         check(dict.lookup("かいた").contains("書いた"), "dict godan ta-form kaita");
@@ -248,6 +248,37 @@ public class TestMain {
         check(!entries.isEmpty() && entries.stream()
             .anyMatch(e -> e[0].equals("がっこう") && e[1].equals("学校")),
             "engine predictEntries pair");
+
+        // 長い入力でも変換が効く (文節分割変換: 助詞の位置で区切って変換)
+        check(engine.candidates("きょうはあつい", null).contains("今日は暑い"),
+            "engine segmented convert kyouhaatsui");
+        check(engine.candidates("がっこうにいく", null).contains("学校に行く"),
+            "engine segmented convert gakkouniiku");
+        check(engine.candidates("わたしはがくせい", null).contains("私は学生"),
+            "engine segmented convert watashihagakusei");
+        check(engine.candidates("べんきょうする", null).contains("勉強する"),
+            "engine segmented convert suru verb");
+        check(engine.candidates("にほんごをべんきょうする", null).contains("日本語を勉強する"),
+            "engine segmented convert long sentence");
+        check(engine.candidates("ありがとうございます", null).contains("有難うございます"),
+            "engine greeting phrase");
+
+        // 長い入力でも予測が止まらない (末尾セグメントへの予測)
+        check(engine.predictEntries("わたしはがくせ", 8).stream()
+            .anyMatch(e -> e[0].equals("わたしはがくせい") && e[1].equals("私は学生")),
+            "engine segmented predict watashiha");
+        check(engine.predictEntries("きょうはあつ", 8).stream()
+            .anyMatch(e -> e[1].equals("今日は暑い")),
+            "engine segmented predict kyouhaatsu");
+        check(engine.predictEntries("がっこうにい", 8).stream()
+            .anyMatch(e -> e[1].equals("学校に行く")),
+            "engine segmented predict gakkouni-i");
+        check(engine.predict("きょうはあつ", 8).contains("今日は暑い"),
+            "engine predict long input");
+
+        // 区切れない入力では誤った予測を出さない (てんき は分割対象外)
+        check(engine.predictEntries("てんき", 8).isEmpty(),
+            "engine no garbage prediction tenki");
 
         // 前方一致 (二分探索版): prefix より長く prefix で始まる読みだけが返る
         List<String> withPrefix = dict.readingsWithPrefix("がっ");
@@ -453,6 +484,15 @@ public class TestMain {
         engine2.setUserDictionary(user);
         check(engine2.candidates("よるかな", null).get(0).equals("夜奏"),
             "engine setUserDictionary takes effect");
+
+        // ユーザー辞書の語も予測候補に出る (前方一致)
+        user.add("よるかなすぺしゃる", "夜奏スペシャル");
+        check(engine.predict("よるかな", 8).contains("夜奏スペシャル"),
+            "engine predict includes userdict");
+        check(user.readingsWithPrefix("よるかな").contains("よるかなすぺしゃる"),
+            "userdict readingsWithPrefix");
+        check(!user.readingsWithPrefix("よるかな").contains("よるかな"),
+            "userdict readingsWithPrefix excludes exact");
     }
 
     // ----- 1.6 SafetyGuard (セーフティ判定) -----

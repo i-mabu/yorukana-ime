@@ -1,5 +1,6 @@
 import jp.yorukana.ime.ConversionEngine;
 import jp.yorukana.ime.Dictionary;
+import jp.yorukana.ime.EnFlickResolver;
 import jp.yorukana.ime.FlickResolver;
 import jp.yorukana.ime.KanaUtils;
 import jp.yorukana.ime.MemoryLearningStore;
@@ -34,6 +35,7 @@ public class TestMain {
         testKanaUtils();
         testDictionaryAndEngine();
         testFlickResolver();
+        testEnFlickResolver();
         testUserDictionary();
         testSafetyGuard();
         System.out.println("ALL TESTS PASSED: " + passed + " checks");
@@ -341,6 +343,52 @@ public class TestMain {
         check(!FlickResolver.isAssigned(10, FlickResolver.DIR_CENTER),
             "flick row 10 unassigned");
         check(FlickResolver.ROW_COUNT == 10, "flick row count 10");
+    }
+
+    // ----- 1.4b EnFlickResolver (英数フリック) -----
+    private static void testEnFlickResolver() {
+        check(EnFlickResolver.GROUP_COUNT == 11, "enflick group count 11");
+
+        // ABC (group=1): 中央=a 左=b 上=c、右・下は未割り当て (中央へフォールバック)
+        check(EnFlickResolver.charAt(1, FlickResolver.DIR_CENTER) == 'a', "enflick abc center");
+        check(EnFlickResolver.charAt(1, FlickResolver.DIR_LEFT) == 'b', "enflick abc left");
+        check(EnFlickResolver.charAt(1, FlickResolver.DIR_UP) == 'c', "enflick abc up");
+        check(!EnFlickResolver.isAssigned(1, FlickResolver.DIR_RIGHT),
+            "enflick abc right unassigned");
+        check(EnFlickResolver.charAt(1, FlickResolver.DIR_RIGHT) == 'a',
+            "enflick abc right falls back to center");
+
+        // PQRS / WXYZ は4文字 (右まで割り当て)
+        check(EnFlickResolver.charAt(6, FlickResolver.DIR_RIGHT) == 's', "enflick pqrs right");
+        check(EnFlickResolver.charAt(8, FlickResolver.DIR_RIGHT) == 'z', "enflick wxyz right");
+        check(EnFlickResolver.charAt(5, FlickResolver.DIR_UP) == 'o', "enflick mno up");
+
+        // 数字・記号グループ (group=0) と句読点グループ (group=10)
+        check(EnFlickResolver.charAt(0, FlickResolver.DIR_CENTER) == '0', "enflick num center");
+        check(EnFlickResolver.charAt(0, FlickResolver.DIR_LEFT) == '/', "enflick num left");
+        check(EnFlickResolver.charAt(0, FlickResolver.DIR_UP) == ':', "enflick num up");
+        check(EnFlickResolver.charAt(10, FlickResolver.DIR_CENTER) == ',', "enflick punct center");
+        check(EnFlickResolver.charAt(10, FlickResolver.DIR_DOWN) == '.', "enflick punct down");
+
+        // タップ循環の並び (割り当て済みを方向順に)
+        java.util.List<Character> cyc = EnFlickResolver.cycleChars(1);
+        check(cyc.size() == 3 && cyc.get(0) == 'a' && cyc.get(1) == 'b' && cyc.get(2) == 'c',
+            "enflick cycle abc");
+        java.util.List<Character> cyc6 = EnFlickResolver.cycleChars(6);
+        check(cyc6.size() == 4 && cyc6.get(3) == 's', "enflick cycle pqrs");
+        check(EnFlickResolver.cycleChars(0).size() == 5, "enflick cycle num 5");
+        check(EnFlickResolver.cycleChars(99).isEmpty(), "enflick cycle out of range empty");
+
+        // ラベル
+        check("ABC".equals(EnFlickResolver.label(1)), "enflick label abc");
+        check("0/:_".equals(EnFlickResolver.label(0)), "enflick label num");
+        check("".equals(EnFlickResolver.label(99)), "enflick label out of range");
+
+        // 範囲外
+        check(EnFlickResolver.charAt(11, FlickResolver.DIR_CENTER) == '\0',
+            "enflick group 11 is nul");
+        check(!EnFlickResolver.isAssigned(-1, FlickResolver.DIR_CENTER),
+            "enflick group -1 unassigned");
     }
 
     // ----- 1.5 UserDictionary -----

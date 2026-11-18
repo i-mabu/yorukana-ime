@@ -13,12 +13,12 @@ import android.view.KeyEvent
 import android.view.View
 import android.view.inputmethod.EditorInfo
 import android.view.inputmethod.InputMethodManager
-import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.ScrollState
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -41,9 +41,6 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.geometry.CornerRadius
-import androidx.compose.ui.geometry.Offset
-import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.AwaitPointerEventScope
 import androidx.compose.ui.input.pointer.PointerId
@@ -54,9 +51,6 @@ import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.layout.positionInParent
 import androidx.compose.ui.layout.positionInRoot
 import androidx.compose.ui.platform.ComposeView
-import androidx.compose.ui.text.TextStyle
-import androidx.compose.ui.text.drawText
-import androidx.compose.ui.text.rememberTextMeasurer
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -132,8 +126,9 @@ class YoruKanaService : InputMethodService(), LifecycleOwner, ViewModelStoreOwne
     // Compose が購読する状態はスナップショットステートにする
     private var night by mutableStateOf(true)
     private var flickMode by mutableStateOf(true)
+    private var enFlick by mutableStateOf(true) // 英数: true=フリック配列 / false=QWERTY
     private var mode by mutableStateOf(MODE_ROMAJI)
-    private var symbolPage by mutableStateOf(0) // 0=記号 / 1=絵文字
+    private var symbolPage by mutableStateOf(0) // 記号パネルのカテゴリ番号
     private var caps by mutableStateOf(false)
     private var currentDisplay by mutableStateOf("")
     private var candidates by mutableStateOf<List<String>>(emptyList())
@@ -153,6 +148,12 @@ class YoruKanaService : InputMethodService(), LifecycleOwner, ViewModelStoreOwne
     private var lastKanaRow = -1
     private var lastKanaTime: Long = 0
 
+    // 英数フリックのタップ循環の追跡 (直接コミット方式のため、
+    // 循環時は直前の1文字を消してから次の文字を入れ直す)
+    private var lastEnGroup = -1
+    private var lastEnTime: Long = 0
+    private var lastEnChar: Char = '\u0000'
+
     // 句読点循環キー (、。？！) の循環順と現在位置。
     // 他のキー操作ではリセットしない (タップ回数だけで進む)。
     private var punctCyclePos = 0
@@ -171,14 +172,15 @@ class YoruKanaService : InputMethodService(), LifecycleOwner, ViewModelStoreOwne
     }
 
     // ----- 1.4 プレビュー表示状態 (オーバーレイ) -----
-    // フリックプレビュー: 十字配置の中心座標はプレビュー枠 (152dp) 内の
-    // ローカル座標で保持する。枠の位置はルート左上からの px オフセット。
+    // フリックプレビュー: 横並びストリップ (Simeji 準拠)。
+    // items はストリップの並び順 (左方向・中央・上・右・下 の順で
+    // 割り当て済みのものだけ)。位置はルート左上からの px オフセット。
+    private class FlickItem(val dir: Int, val ch: String)
+
     private class FlickUiState(
-        val chars: List<String>,
+        val items: List<FlickItem>,
         val leftPx: Int,
         val topPx: Int,
-        val cxPx: Float,
-        val cyPx: Float,
         val dir: Int,
     )
 
@@ -322,6 +324,7 @@ class YoruKanaService : InputMethodService(), LifecycleOwner, ViewModelStoreOwne
         // セーフモード以上ではバイブレーションも止める (復旧優先)
         vibrateOn = p.getBoolean(KEY_VIBRATE, true) && safetyMode == SafetyMode.NORMAL
         flickMode = "toggle" != p.getString(KEY_KANA_STYLE, "flick")
+        enFlick = "qwerty" != p.getString(KEY_EN_LAYOUT, "flick")
         if (night) {
             colRoot = AndroidColor.rgb(0x0B, 0x12, 0x26)
             colBarBg = AndroidColor.rgb(0x0B, 0x12, 0x26)
@@ -498,7 +501,7 @@ class YoruKanaService : InputMethodService(), LifecycleOwner, ViewModelStoreOwne
                 when (mode) {
                     MODE_ROMAJI -> RomajiKeys()
                     MODE_KANA -> KanaKeys()
-                    MODE_EN -> EnKeys()
+                    MODE_EN -> if (enFlick) EnFlickKeys() else EnKeys()
                     MODE_SYMBOL -> SymbolKeys()
                 }
             }
@@ -872,13 +875,16 @@ class YoruKanaService : InputMethodService(), LifecycleOwner, ViewModelStoreOwne
     // 全行で一致させる。両端のユーティリティ列は細く、中央3列の
     // かなキーが主役の標準的な配分。高さ58dp / かなキー 22sp は共通。
     // 行1: 記 あ か さ ⌫ / 行2: ◀ た な は ▶ /
-    // 行3: 😊 ま や ら 変換 / 行4: モード ゛゜小 わ 、。？！ ⏎
+    // 行3: 123/カナ ま や ら 変換 / 行4: モード ゛゜小/😊 わ 、。？！ ⏎
+    // 行3左と行4の2番目は Simeji と同じ文脈キー: 未確定文字列が
+    // 無ければ 123 / 😊、あれば カナ (カタカナ変換) / ゛゜小 になる。
     @Composable
     private fun KanaKeys() {
+        val composingNow = currentDisplay.isNotEmpty()
         // 行1: [記] あ か さ [⌫]
         Row(modifier = Modifier.fillMaxWidth()) {
             ClickKey("記", 0.75f, true, 15, KANA_KEY_HEIGHT_DP) {
-                symbolPage = 0
+                symbolPage = SYMBOL_PAGE_COMMON
                 switchMode(MODE_SYMBOL)
             }
             KanaKey(0)
@@ -896,12 +902,21 @@ class YoruKanaService : InputMethodService(), LifecycleOwner, ViewModelStoreOwne
             CursorKey(false, "▶", 0.75f, KANA_KEY_HEIGHT_DP)
         }
 
-        // 行3: [😊] ま や ら [変換/スペース] (Simeji と同じ右端配置。
-        // 動作は従来の変換キーと同じ: 未確定あり→候補送り、なし→全角スペース)
+        // 行3: [123/カナ] ま や ら [変換/スペース] (Simeji と同じ配置。
+        // 左は文脈キー: 未確定なし→「123」で数字カテゴリへ、
+        // 未確定あり→「カナ」で未確定文字列をカタカナに変換する。
+        // 右の変換キーは従来通り: 未確定あり→候補送り、なし→全角スペース)
         Row(modifier = Modifier.fillMaxWidth()) {
-            ClickKey("😊", 0.75f, true, 17, KANA_KEY_HEIGHT_DP) {
-                symbolPage = 1
-                switchMode(MODE_SYMBOL)
+            ClickKey(
+                if (composingNow) "カナ" else "123",
+                0.75f, true, if (composingNow) 14 else 15, KANA_KEY_HEIGHT_DP,
+            ) {
+                if (currentDisplay.isNotEmpty()) {
+                    onKatakanaKey()
+                } else {
+                    symbolPage = SYMBOL_PAGE_NUMBER
+                    switchMode(MODE_SYMBOL)
+                }
             }
             KanaKey(6)
             KanaKey(7)
@@ -909,10 +924,21 @@ class YoruKanaService : InputMethodService(), LifecycleOwner, ViewModelStoreOwne
             SpaceKey(0.75f, KANA_KEY_HEIGHT_DP)
         }
 
-        // 行4: [モード] [゛゜小] わ [、。？！] [⏎] (Simeji と同じ並び)
+        // 行4: [モード] [゛゜小/😊] わ [、。？！] [⏎] (Simeji と同じ並び。
+        // 2番目は文脈キー: 未確定あり→゛゜小、なし→絵文字パネルへ)
         Row(modifier = Modifier.fillMaxWidth()) {
             ModeKey(0.75f, KANA_KEY_HEIGHT_DP)
-            ClickKey("゛゜小", 1f, true, 13, KANA_KEY_HEIGHT_DP) { onDakutenKey() }
+            ClickKey(
+                if (composingNow) "゛゜小" else "😊",
+                1f, true, if (composingNow) 13 else 17, KANA_KEY_HEIGHT_DP,
+            ) {
+                if (currentDisplay.isNotEmpty()) {
+                    onDakutenKey()
+                } else {
+                    symbolPage = SYMBOL_PAGE_EMOJI
+                    switchMode(MODE_SYMBOL)
+                }
+            }
             KanaKey(9) // わ
             ClickKey("、。？！", 1f, true, 14, KANA_KEY_HEIGHT_DP) { onPunctCycleKey() }
             ClickKey("⏎", 0.75f, true, 20, KANA_KEY_HEIGHT_DP) { onEnter() }
@@ -946,18 +972,147 @@ class YoruKanaService : InputMethodService(), LifecycleOwner, ViewModelStoreOwne
         }
     }
 
-    // ----- 3.6 記号グリッド -----
+    // ----- 3.5b 英数フリック (Simeji の英字12キー準拠) -----
+    // 行1: 記 0/:_ ABC DEF ⌫ / 行2: ◀ GHI JKL MNO ▶ /
+    // 行3: 123 PQRS TUV WXYZ スペース / 行4: モード a/A '"&- ,?!; ⏎
+    // 列配分・キー高さはかな配列と共通 ([0.75/1/1/1/0.75] / 58dp)。
+    @Composable
+    private fun EnFlickKeys() {
+        Row(modifier = Modifier.fillMaxWidth()) {
+            ClickKey("記", 0.75f, true, 15, KANA_KEY_HEIGHT_DP) {
+                symbolPage = SYMBOL_PAGE_COMMON
+                switchMode(MODE_SYMBOL)
+            }
+            EnFlickKey(0)
+            EnFlickKey(1)
+            EnFlickKey(2)
+            DeleteKey(0.75f, KANA_KEY_HEIGHT_DP)
+        }
+        Row(modifier = Modifier.fillMaxWidth()) {
+            CursorKey(true, "◀", 0.75f, KANA_KEY_HEIGHT_DP)
+            EnFlickKey(3)
+            EnFlickKey(4)
+            EnFlickKey(5)
+            CursorKey(false, "▶", 0.75f, KANA_KEY_HEIGHT_DP)
+        }
+        Row(modifier = Modifier.fillMaxWidth()) {
+            ClickKey("123", 0.75f, true, 14, KANA_KEY_HEIGHT_DP) {
+                symbolPage = SYMBOL_PAGE_NUMBER
+                switchMode(MODE_SYMBOL)
+            }
+            EnFlickKey(6)
+            EnFlickKey(7)
+            EnFlickKey(8)
+            SpaceKey(0.75f, KANA_KEY_HEIGHT_DP)
+        }
+        Row(modifier = Modifier.fillMaxWidth()) {
+            ModeKey(0.75f, KANA_KEY_HEIGHT_DP)
+            ClickKey(if (caps) "A" else "a", 1f, true, 16, KANA_KEY_HEIGHT_DP) { caps = !caps }
+            EnFlickKey(9)
+            EnFlickKey(10)
+            ClickKey("⏎", 0.75f, true, 20, KANA_KEY_HEIGHT_DP) { onEnter() }
+        }
+    }
+
+    // 英数フリックキー。かなキーと同じ操作系: フリックで方向の文字、
+    // タップ (中央) はグループ内の循環 (a→b→c)。入力は直接コミット。
+    @Composable
+    private fun RowScope.EnFlickKey(groupIdx: Int) {
+        var coords by remember { mutableStateOf<LayoutCoordinates?>(null) }
+        val textSizeSp = when (groupIdx) {
+            0 -> 15
+            6, 8 -> 17
+            9 -> 14
+            10 -> 15
+            else -> 19
+        }
+        Box(
+            modifier = Modifier
+                .weight(1f)
+                .height(KANA_KEY_HEIGHT_DP.dp)
+                .onGloballyPositioned { coords = it }
+                .pointerInput(groupIdx) {
+                    awaitPointerEventScope {
+                        while (true) {
+                            val first = awaitPointerEvent()
+                            val down = first.changes.firstOrNull { it.changedToDown() }
+                                ?: continue
+                            down.consume()
+                            buzz()
+                            val downPos = down.position
+                            var dir = FlickResolver.DIR_CENTER
+                            coords?.let { showEnFlickPreview(groupIdx, it) }
+                            try {
+                                var done = false
+                                while (!done) {
+                                    val ev = awaitPointerEvent()
+                                    val change = ev.changes.firstOrNull { it.id == down.id }
+                                        ?: continue
+                                    change.consume()
+                                    dir = FlickResolver.resolveDirection(
+                                        change.position.x - downPos.x,
+                                        change.position.y - downPos.y,
+                                        dp(20).toFloat(),
+                                    )
+                                    if (change.pressed) {
+                                        setFlickDirection(dir)
+                                    } else {
+                                        hideFlickPreview()
+                                        if (dir == FlickResolver.DIR_CENTER) {
+                                            onEnFlickTap(groupIdx)
+                                        } else {
+                                            onEnFlickFlick(groupIdx, dir)
+                                        }
+                                        done = true
+                                    }
+                                }
+                            } finally {
+                                hideFlickPreview()
+                            }
+                        }
+                    }
+                },
+        ) {
+            KeyVisual(EnFlickResolver.label(groupIdx), textSizeSp, false)
+        }
+    }
+
+    // ----- 3.6 記号グリッド (カテゴリタブ式) -----
     @Composable
     private fun SymbolKeys() {
-        // 記号 / 絵文字 の切替タブ (選択中タブが special 色になる)
-        Row(modifier = Modifier.fillMaxWidth()) {
-            ClickKey("記号", 1f, symbolPage == 0, 14) { symbolPage = 0 }
-            ClickKey("絵文字", 1f, symbolPage == 1, 14) { symbolPage = 1 }
+        // カテゴリタブ (Simeji 準拠: 常用/カッコ/図形/数字/絵文字)。
+        // 横スクロールで全カテゴリに届く。選択中タブが special 色になる。
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .horizontalScroll(rememberScrollState()),
+        ) {
+            for (i in SYMBOL_CATEGORY_NAMES.indices) {
+                Box(
+                    modifier = Modifier
+                        .height(48.dp)
+                        .clickable(
+                            interactionSource = remember { MutableInteractionSource() },
+                            indication = null,
+                        ) {
+                            buzz()
+                            symbolPage = i
+                        }
+                        .background(
+                            if (symbolPage == i) cSpecial else Color.Transparent,
+                        )
+                        .padding(horizontal = 18.dp),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Text(SYMBOL_CATEGORY_NAMES[i], fontSize = 14.sp, color = cText)
+                }
+            }
         }
 
-        val emoji = symbolPage == 1
-        val items = if (emoji) EMOJIS else SYMBOLS
-        val cols = if (emoji) 8 else 10
+        val page = if (symbolPage in SYMBOL_CATEGORY_ITEMS.indices) symbolPage else 0
+        val items = SYMBOL_CATEGORY_ITEMS[page]
+        val cols = SYMBOL_CATEGORY_COLS[page]
+        val emoji = page == SYMBOL_PAGE_EMOJI
         var i = 0
         while (i < items.size) {
             val end = minOf(i + cols, items.size)
@@ -983,54 +1138,36 @@ class YoruKanaService : InputMethodService(), LifecycleOwner, ViewModelStoreOwne
     }
 
     // ----- 3.7 プレビュー (オーバーレイ描画) -----
-    // フリックプレビュー (十字配置)。View 時代の FlickPreviewView の
-    // Canvas 描画を Compose Canvas で再現する。
+    // フリックプレビュー (横並びストリップ、Simeji 準拠)。
+    // 押したキーの真上に、そのキーの文字を [左・中央・上・右・下] の
+    // 順で横一列に並べて出し、現在のフリック方向のセルを強調する。
     @Composable
     private fun FlickPreviewOverlay() {
         val ui = flickUi ?: return
-        val textMeasurer = rememberTextMeasurer()
         Box(
             modifier = Modifier
                 .offset { IntOffset(ui.leftPx, ui.topPx) }
-                .size(FLICK_PREVIEW_SIZE_DP.dp),
+                .width((ui.items.size * FLICK_STRIP_CELL_DP).dp)
+                .height(FLICK_STRIP_HEIGHT_DP.dp)
+                .background(cSpecial, RoundedCornerShape(12.dp)),
         ) {
-            Canvas(modifier = Modifier.fillMaxSize()) {
-                val unit = dp(38).toFloat()
-                val pad = unit * 0.62f
-                val cx = ui.cxPx
-                val cy = ui.cyPx
-                drawRoundRect(
-                    color = cSpecial,
-                    topLeft = Offset(cx - unit - pad, cy - unit - pad),
-                    size = Size((unit + pad) * 2, (unit + pad) * 2),
-                    cornerRadius = CornerRadius(unit * 0.3f, unit * 0.3f),
-                )
-                // DIR_CENTER, LEFT, UP, RIGHT, DOWN の順のオフセット
-                val offs = arrayOf(
-                    floatArrayOf(0f, 0f), floatArrayOf(-unit, 0f), floatArrayOf(0f, -unit),
-                    floatArrayOf(unit, 0f), floatArrayOf(0f, unit),
-                )
-                val style = TextStyle(
-                    color = cText,
-                    fontSize = (unit * 0.52f).toSp(),
-                )
-                for (d in 0 until 5) {
-                    val ch = ui.chars.getOrNull(d) ?: ""
-                    if (ch.isEmpty()) continue // 未割り当て方向 (や行の左右等) は描かない
-                    val x = cx + offs[d][0]
-                    val y = cy + offs[d][1]
-                    // ハイライト円は、文字が割り当てられた方向にだけ描く
-                    if (d == ui.dir) {
-                        drawCircle(color = cAccent, radius = unit * 0.55f, center = Offset(x, y))
+            Row(modifier = Modifier.fillMaxSize()) {
+                for (item in ui.items) {
+                    Box(
+                        modifier = Modifier
+                            .width(FLICK_STRIP_CELL_DP.dp)
+                            .fillMaxHeight(),
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        if (item.dir == ui.dir) {
+                            Box(
+                                modifier = Modifier
+                                    .size(38.dp)
+                                    .background(cAccent, RoundedCornerShape(19.dp)),
+                            )
+                        }
+                        Text(item.ch, fontSize = 20.sp, color = cText)
                     }
-                    val layout = textMeasurer.measure(ch, style)
-                    drawText(
-                        layout,
-                        topLeft = Offset(
-                            x - layout.size.width / 2f,
-                            y - layout.size.height / 2f,
-                        ),
-                    )
                 }
             }
         }
@@ -1128,48 +1265,128 @@ class YoruKanaService : InputMethodService(), LifecycleOwner, ViewModelStoreOwne
         updateComposing()
     }
 
-    private fun showFlickPreview(rowIdx: Int, coords: LayoutCoordinates) {
+    // 文脈キー「カナ」: 未確定のかなをカタカナに変換する。
+    // 候補検索用の読みは updateComposing 側でひらがなに正規化されるため、
+    // 変換後も候補はそのまま使える。
+    private fun onKatakanaKey() {
+        if (mode != MODE_KANA || kanaBuf.isEmpty()) return
+        val converted = KanaUtils.toKatakana(kanaBuf.toString())
+        if (converted == kanaBuf.toString()) return
+        kanaBuf.setLength(0)
+        kanaBuf.append(converted)
+        lastKanaRow = -1
+        highlight = -1
+        updateComposing()
+    }
+
+    // ----- 4.1b 英数フリック入力 -----
+    // タップ: グループ内を循環する (a→b→c)。直接コミット方式のため、
+    // 循環時はカーソル直前の1文字が前回入れた文字であることを確認して
+    // から消し、次の文字を入れ直す (関係ない文字を消さないため)。
+    private fun onEnFlickTap(groupIdx: Int) {
+        val cycle = EnFlickResolver.cycleChars(groupIdx)
+        if (cycle.isEmpty()) return
+        val now = System.currentTimeMillis()
+        var ch = cycle[0]
+        var replace = false
+        if (groupIdx == lastEnGroup && now - lastEnTime < 1000) {
+            val idx = cycle.indexOf(lastEnChar)
+            if (idx >= 0) {
+                val prevOut = if (caps && lastEnChar.isLetter()) {
+                    lastEnChar.uppercaseChar()
+                } else {
+                    lastEnChar
+                }
+                val before = try {
+                    currentInputConnection?.getTextBeforeCursor(1, 0)?.toString()
+                } catch (e: Exception) {
+                    null
+                }
+                if (before == prevOut.toString()) {
+                    ch = cycle[(idx + 1) % cycle.size]
+                    replace = true
+                }
+            }
+        }
+        if (replace) {
+            try {
+                currentInputConnection?.deleteSurroundingText(1, 0)
+            } catch (e: Exception) {
+                // 接続が切れた等の例外でキー処理全体を落とさない
+            }
+        }
+        commitEnChar(ch)
+        lastEnGroup = groupIdx
+        lastEnTime = now
+        lastEnChar = ch
+    }
+
+    // フリック: 方向の文字をそのまま入れる (循環の追跡はリセットする)
+    private fun onEnFlickFlick(groupIdx: Int, dir: Int) {
+        val ch = EnFlickResolver.charAt(groupIdx, dir)
+        if (ch == '\u0000') return
+        commitEnChar(ch)
+        lastEnGroup = -1
+        lastEnChar = ch
+    }
+
+    private fun commitEnChar(ch: Char) {
+        val out = if (caps && ch.isLetter()) ch.uppercaseChar() else ch
+        commitDirect(out.toString())
+    }
+
+    // ストリップ内の並び順: 左方向・中央・上・右・下 (Simeji の表示順)
+    private val STRIP_DIR_ORDER: IntArray = intArrayOf(
+        FlickResolver.DIR_LEFT, FlickResolver.DIR_CENTER, FlickResolver.DIR_UP,
+        FlickResolver.DIR_RIGHT, FlickResolver.DIR_DOWN,
+    )
+
+    // 横並びストリップをキーの真上に表示する (上に置けない場合は下)。
+    // 画面端のキーではみ出す場合はルート幅の内側にクランプする。
+    private fun showStripPreview(items: List<FlickItem>, coords: LayoutCoordinates) {
         // 最小モードではプレビュー (オーバーレイ描画) を出さない
         if (safetyMode == SafetyMode.MINIMAL) return
-        val size = dp(FLICK_PREVIEW_SIZE_DP)
+        if (items.isEmpty()) return
+        val cellPx = dp(FLICK_STRIP_CELL_DP)
+        val stripW = cellPx * items.size
+        val stripH = dp(FLICK_STRIP_HEIGHT_DP)
         val pos = coords.positionInRoot()
         val keyCx = (pos.x + coords.size.width / 2f).toInt()
-        val keyCy = (pos.y + coords.size.height / 2f).toInt()
-        // プレビュー (固定サイズ) の中心がキー中心に重なるよう位置決めする。
-        // 画面端のキーではみ出す場合は、左端は 0 以上かつルート幅の内側に、
-        // 上端は 0 以上にクランプする。
-        var left = keyCx - size / 2
-        var top = keyCy - size / 2
-        val rootW = rootWidthPx
+        var left = keyCx - stripW / 2
         if (left < 0) left = 0
-        if (rootW > 0 && left + size > rootW) left = max(0, rootW - size)
-        if (top < 0) top = 0
-        val chars = ArrayList<String>(5)
-        for (d in 0 until 5) {
-            chars.add(
-                if (FlickResolver.isAssigned(rowIdx, d)) {
-                    FlickResolver.charAt(rowIdx, d).toString()
-                } else {
-                    ""
-                },
-            )
+        val rootW = rootWidthPx
+        if (rootW > 0 && left + stripW > rootW) left = max(0, rootW - stripW)
+        var top = pos.y.toInt() - stripH - dp(6)
+        if (top < 0) top = pos.y.toInt() + coords.size.height + dp(6)
+        flickUi = FlickUiState(items, left, top, FlickResolver.DIR_CENTER)
+    }
+
+    private fun showFlickPreview(rowIdx: Int, coords: LayoutCoordinates) {
+        val items = ArrayList<FlickItem>(5)
+        for (d in STRIP_DIR_ORDER) {
+            if (FlickResolver.isAssigned(rowIdx, d)) {
+                items.add(FlickItem(d, FlickResolver.charAt(rowIdx, d).toString()))
+            }
         }
-        // 描画座標はプレビュー枠内のローカル座標で渡す
-        // (十字の中心 = 枠内でのキー中心の相対位置)。
-        flickUi = FlickUiState(
-            chars = chars,
-            leftPx = left,
-            topPx = top,
-            cxPx = (keyCx - left).toFloat(),
-            cyPx = (keyCy - top).toFloat(),
-            dir = FlickResolver.DIR_CENTER,
-        )
+        showStripPreview(items, coords)
+    }
+
+    private fun showEnFlickPreview(groupIdx: Int, coords: LayoutCoordinates) {
+        val items = ArrayList<FlickItem>(5)
+        for (d in STRIP_DIR_ORDER) {
+            if (EnFlickResolver.isAssigned(groupIdx, d)) {
+                var ch = EnFlickResolver.charAt(groupIdx, d)
+                if (caps && ch.isLetter()) ch = ch.uppercaseChar()
+                items.add(FlickItem(d, ch.toString()))
+            }
+        }
+        showStripPreview(items, coords)
     }
 
     private fun setFlickDirection(dir: Int) {
         val ui = flickUi ?: return
         if (ui.dir != dir) {
-            flickUi = FlickUiState(ui.chars, ui.leftPx, ui.topPx, ui.cxPx, ui.cyPx, dir)
+            flickUi = FlickUiState(ui.items, ui.leftPx, ui.topPx, dir)
         }
     }
 
@@ -1200,6 +1417,7 @@ class YoruKanaService : InputMethodService(), LifecycleOwner, ViewModelStoreOwne
 
     // ----- 4.2 共通キー処理 (スペース / Enter / 削除 / モード切替) -----
     private fun onSpace() {
+        lastEnGroup = -1
         if (mode == MODE_EN || mode == MODE_SYMBOL) {
             commitDirect(" ")
             return
@@ -1250,6 +1468,7 @@ class YoruKanaService : InputMethodService(), LifecycleOwner, ViewModelStoreOwne
     }
 
     private fun doDelete() {
+        lastEnGroup = -1
         val ic = currentInputConnection ?: return
         // 変換中 (候補ハイライト中) の削除は、文字を消す前に変換だけを取り消す
         if (highlight >= 0) {
@@ -1275,6 +1494,7 @@ class YoruKanaService : InputMethodService(), LifecycleOwner, ViewModelStoreOwne
         // セキュアセッション (パスワード欄等) では英数モードから移らない
         if (secureSession && newMode != MODE_EN) return
         flushComposing()
+        lastEnGroup = -1
         mode = newMode
     }
 
@@ -1288,6 +1508,7 @@ class YoruKanaService : InputMethodService(), LifecycleOwner, ViewModelStoreOwne
         candidateReadings = emptyList()
         highlight = -1
         lastKanaRow = -1
+        lastEnGroup = -1
     }
 
     // composing を確定してから直接コミットする (句読点・記号用)
@@ -1330,7 +1551,9 @@ class YoruKanaService : InputMethodService(), LifecycleOwner, ViewModelStoreOwne
             currentReading = r.kana + (if (r.pending == "n") "ん" else "")
         } else if (mode == MODE_KANA) {
             currentDisplay = kanaBuf.toString()
-            currentReading = currentDisplay
+            // カナキーでカタカナに変換された後も候補検索が効くよう、
+            // 読みはひらがなに正規化する (通常のひらがな入力では恒等)
+            currentReading = KanaUtils.toHiragana(currentDisplay)
         } else {
             return
         }
@@ -1464,6 +1687,7 @@ class YoruKanaService : InputMethodService(), LifecycleOwner, ViewModelStoreOwne
         const val KEY_VIBRATE = "vibrate"     // boolean
         const val KEY_DEFAULT_MODE = "default_mode" // "romaji"/"kana"/"en"
         const val KEY_KANA_STYLE = "kana_style"     // "flick" / "toggle"
+        const val KEY_EN_LAYOUT = "en_layout"       // "flick" / "qwerty"
         const val KEY_USER_DICT = "user_dict"       // UserDictionary.encode() 形式
         const val FREQ_PREFIX = "freq:"
 
@@ -1472,10 +1696,11 @@ class YoruKanaService : InputMethodService(), LifecycleOwner, ViewModelStoreOwne
         const val MODE_EN = 2
         const val MODE_SYMBOL = 3
 
-        // フリックプレビュー (オーバーレイ) の一辺のサイズ。レイアウトに
-        // 参加させると表示した瞬間にキーボード全体が広がるため、固定サイズ
-        // のオーバーレイとして絶対配置する。
-        private const val FLICK_PREVIEW_SIZE_DP = 152
+        // フリックプレビュー (横並びストリップ) のセル幅と高さ。
+        // レイアウトに参加させると表示した瞬間にキーボード全体が広がる
+        // ため、オーバーレイとして絶対配置する。
+        private const val FLICK_STRIP_CELL_DP = 44
+        private const val FLICK_STRIP_HEIGHT_DP = 52
 
         // キープレビュー (文字キー) の一辺のサイズ
         private const val KEY_PREVIEW_SIZE_DP = 52
@@ -1488,18 +1713,38 @@ class YoruKanaService : InputMethodService(), LifecycleOwner, ViewModelStoreOwne
         // 句読点循環キー (、。？！) の循環順。
         private val PUNCT_CYCLE: Array<String> = arrayOf("、", "。", "？", "！")
 
-        // ----- 6.2 記号・絵文字データ -----
-        // 記号グリッド: 全72件 (10列 × 8行、最終行は2件)。SymbolKeys の
-        // ループで全件分のキーを作るため、配列に載せた記号はすべて表示される。
-        private val SYMBOLS: Array<String> = arrayOf(
-            "、", "。", "！", "？", "・", "：", "；", "（", "）", "「",
-            "」", "『", "』", "［", "］", "｛", "｝", "＠", "＃", "￥",
-            "％", "＆", "＊", "＋", "－", "＝", "＜", "＞", "＿", "〜",
-            "…", "＾", "｜", "／", "＼", "＂", "＇", "〈", "〉", "《",
-            "》", "☆", "★", "○", "●", "◎", "◇", "◆", "□", "■",
-            "△", "▲", "▽", "▼", "※", "♪", "♥", "→", "←", "↑",
-            "↓", "°", "１", "２", "３", "４", "５", "６", "７", "８",
-            "９", "０",
+        // ----- 6.2 記号・絵文字データ (カテゴリ別) -----
+        // 記号パネルはカテゴリタブ式 (Simeji 準拠)。カテゴリの並びと
+        // ページ番号は SYMBOL_PAGE_* と対応する。旧来の記号72件は
+        // すべて、どれかのカテゴリに含まれている。
+        private val SYMBOL_CATEGORY_NAMES: Array<String> = arrayOf(
+            "常用", "カッコ", "図形", "数字", "絵文字",
+        )
+
+        private const val SYMBOL_PAGE_COMMON = 0
+        private const val SYMBOL_PAGE_NUMBER = 3
+        private const val SYMBOL_PAGE_EMOJI = 4
+
+        private val COMMON_SYMBOLS: Array<String> = arrayOf(
+            "、", "。", "！", "？", "・", "：", "；", "＠", "＃", "％",
+            "＆", "＊", "＋", "－", "＝", "＜", "＞", "＿", "〜", "…",
+            "＾", "｜", "／", "＼", "＂", "＇",
+        )
+
+        private val BRACKET_SYMBOLS: Array<String> = arrayOf(
+            "（", "）", "「", "」", "『", "』", "［", "］", "｛", "｝",
+            "〈", "〉", "《", "》", "【", "】", "〔", "〕",
+        )
+
+        private val SHAPE_SYMBOLS: Array<String> = arrayOf(
+            "☆", "★", "○", "●", "◎", "◇", "◆", "□", "■", "△",
+            "▲", "▽", "▼", "※", "♪", "♥", "→", "←", "↑", "↓",
+            "°",
+        )
+
+        private val NUMBER_SYMBOLS: Array<String> = arrayOf(
+            "１", "２", "３", "４", "５", "６", "７", "８", "９", "０",
+            "￥", "＄", "€", "＋", "－", "＝", "＜", "＞", "％",
         )
 
         // よく使う絵文字 約60個 (タップで直接コミット)
@@ -1513,6 +1758,13 @@ class YoruKanaService : InputMethodService(), LifecycleOwner, ViewModelStoreOwne
             "⚽", "🎮", "🎵", "🎧", "🐱", "🐶", "🐰", "🎁",
             "⏰", "💤", "📷", "🏫",
         )
+
+        // カテゴリ別の表示対象と列数 (SYMBOL_CATEGORY_NAMES と同じ順)
+        private val SYMBOL_CATEGORY_ITEMS: Array<Array<String>> = arrayOf(
+            COMMON_SYMBOLS, BRACKET_SYMBOLS, SHAPE_SYMBOLS, NUMBER_SYMBOLS, EMOJIS,
+        )
+
+        private val SYMBOL_CATEGORY_COLS: IntArray = intArrayOf(10, 10, 10, 10, 8)
 
         // ----- 6.3 パスワード欄判定 -----
         // 入力先がパスワード系フィールドかどうか (クラス別に variation を見る)

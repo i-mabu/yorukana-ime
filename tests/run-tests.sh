@@ -23,6 +23,7 @@ SRC=app/src/main/java/jp/yorukana/ime
   "$SRC/LearningStore.kt" \
   "$SRC/MemoryLearningStore.kt" \
   "$SRC/FlickResolver.kt" \
+  "$SRC/EnFlickResolver.kt" \
   "$SRC/UserDictionary.kt" \
   "$SRC/SafetyGuard.kt" \
   "$SRC/ConversionEngine.kt"

@@ -185,7 +185,21 @@ class SettingsActivity : ComponentActivity() {
                         p.edit().putString(YoruKanaService.KEY_KANA_STYLE, "toggle").apply()
                     }
 
-                    // ----- 1.7 ユーザー辞書 -----
+                    // ----- 1.7 英数入力の配列 -----
+                    SectionTitle("英数入力の配列")
+                    var enLayout by remember {
+                        mutableStateOf(p.getString(YoruKanaService.KEY_EN_LAYOUT, "flick") ?: "flick")
+                    }
+                    RadioRow("フリック入力 (ABC/DEF… の12キー、既定)", enLayout == "flick") {
+                        enLayout = "flick"
+                        p.edit().putString(YoruKanaService.KEY_EN_LAYOUT, "flick").apply()
+                    }
+                    RadioRow("QWERTY入力", enLayout == "qwerty") {
+                        enLayout = "qwerty"
+                        p.edit().putString(YoruKanaService.KEY_EN_LAYOUT, "qwerty").apply()
+                    }
+
+                    // ----- 1.8 ユーザー辞書 -----
                     SectionTitle("ユーザー辞書")
                     BodyText("登録した単語は変換候補の先頭に出ます。よみはひらがなで入力してください（カタカナは自動でひらがなに直します）。")
                     val userDict = remember {
@@ -257,7 +271,7 @@ class SettingsActivity : ComponentActivity() {
                         }
                     }
 
-                    // ----- 1.8 学習リセット -----
+                    // ----- 1.9 学習リセット -----
                     SectionTitle("学習データ")
                     BodyText("確定した候補の頻度を記録し、次回から優先表示します。データは端末内にのみ保存されます。")
                     Button(
@@ -272,7 +286,7 @@ class SettingsActivity : ComponentActivity() {
                         modifier = Modifier.fillMaxWidth(),
                     ) { Text("学習データをリセット") }
 
-                    // ----- 1.9 セーフティ -----
+                    // ----- 1.10 セーフティ -----
                     SectionTitle("セーフティ")
                     var safetyMode by remember { mutableStateOf(SafetyNet.lastMode(context)) }
                     var crashTotal by remember { mutableStateOf(SafetyNet.totalCrashes(context)) }
@@ -326,7 +340,7 @@ class SettingsActivity : ComponentActivity() {
                         BodyText("クラッシュは記録されていません。")
                     }
 
-                    // ----- 1.10 プライバシー -----
+                    // ----- 1.11 プライバシー -----
                     SectionTitle("プライバシー")
                     BodyText("よるかな IME はネットワーク権限を持たず、入力内容を外部に送信することは一切ありません。")
                 }

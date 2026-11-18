@@ -46,6 +46,8 @@ class ConversionEngine(
             if (split != null) {
                 val stem = reading.substring(0, reading.length - 1)
                 val particle = reading.substring(reading.length - 1)
+                // 頻度キーは語幹ではなく reading 全体: 学習は確定時に
+                // (読み全体, 助詞付き候補) の組で記録されるため、それと揃える
                 val stemCands = sortByFreq(
                     reading,
                     withSuffix(dictionary.lookup(stem), particle),
@@ -63,6 +65,7 @@ class ConversionEngine(
 
     // ----- 1.2 予測候補 (前方一致) -----
     // prefix で始まる読みの代表候補を返す。頻度→読みの短さ の順。
+    // 候補文字列だけを返す版で、読みも要る場合は predictEntries を使う。
     fun predict(prefix: String?, limit: Int): List<String> {
         val out = ArrayList<String>()
         if (prefix.isNullOrEmpty() || limit <= 0) return out

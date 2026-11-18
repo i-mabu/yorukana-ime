@@ -1,7 +1,9 @@
 package jp.yorukana.ime
 
 // ===== 1. 学習ストア (メモリ実装 / 純ロジック) =====
-// テスト用および永続化レイヤの土台。キーは 読み + 区切り + 候補。
+// テスト用のインメモリ実装。永続化は Service 側の PrefsLearningStore が
+// LearningStore を直接実装して担う (このクラスは継承されていない)。
+// キーは 読み + SEP (\u0001) + 候補 (PrefsLearningStore の "|" 区切りとは別形式)。
 open class MemoryLearningStore : LearningStore {
 
     protected val freq: MutableMap<String, Int> = HashMap()
@@ -19,7 +21,7 @@ open class MemoryLearningStore : LearningStore {
         freq.clear()
     }
 
-    // 永続化レイヤが復元/保存に使う生マップ
+    // 内部の頻度マップをそのまま返す (内容確認用)
     fun rawMap(): Map<String, Int> {
         return freq
     }

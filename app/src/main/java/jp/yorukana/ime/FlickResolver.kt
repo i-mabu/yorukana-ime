@@ -33,7 +33,8 @@ object FlickResolver {
     )
 
     // 変位 (dx, dy) としきい値からフリック方向を決める。
-    // dy は画面座標系 (下方向が正)。しきい値未満の変位は DIR_CENTER。
+    // dy は画面座標系 (下方向が正)。変位の長さ (dx, dy のユークリッド距離、
+    // 軸ごとではない) がしきい値未満なら DIR_CENTER。
     // 斜めの場合は絶対値の大きい軸を優先する。
     @JvmStatic
     fun resolveDirection(dx: Float, dy: Float, thresholdPx: Float): Int {

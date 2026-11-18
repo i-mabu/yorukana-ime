@@ -956,6 +956,8 @@ class YoruKanaService : InputMethodService(), LifecycleOwner, ViewModelStoreOwne
     private fun onKanaKey(rowIdx: Int) {
         val now = System.currentTimeMillis()
         var cycled = false
+        // トグル循環: 同じキーを1秒以内に再タップし、末尾文字がその行に
+        // 属していれば、新規追加ではなく末尾文字を段の次の文字に進める
         if (rowIdx == lastKanaRow && now - lastKanaTime < 1000 && kanaBuf.isNotEmpty()) {
             val last = kanaBuf[kanaBuf.length - 1]
             if (KanaUtils.rowIndexOf(last) == rowIdx) {
@@ -1074,6 +1076,8 @@ class YoruKanaService : InputMethodService(), LifecycleOwner, ViewModelStoreOwne
             return
         }
         if (currentDisplay.isEmpty()) {
+            // composing が無い日本語モードのスペースは全角スペースを入れる
+            // (英数/記号モードの半角スペースとは別扱い)
             commitDirect("　")
             return
         }
@@ -1191,6 +1195,9 @@ class YoruKanaService : InputMethodService(), LifecycleOwner, ViewModelStoreOwne
         if (mode == MODE_ROMAJI) {
             val r = RomajiConverter.convert(romajiBuf.toString())
             currentDisplay = r.kana + r.pending
+            // 表示は pending の "n" のままだが、候補検索用の読みでは末尾の
+            // n を ん として扱う (例: "kan" の表示で かん の候補を出すため)。
+            // n 以外の pending は読みに含めない。
             currentReading = r.kana + (if (r.pending == "n") "ん" else "")
         } else if (mode == MODE_KANA) {
             currentDisplay = kanaBuf.toString()
@@ -1239,6 +1246,8 @@ class YoruKanaService : InputMethodService(), LifecycleOwner, ViewModelStoreOwne
                         newReadings.add(e[0])
                     }
                 }
+                // 候補は最大24件に絞る。candidateReadings は候補と同順・同数で
+                // 対応付けるため、末尾から一緒に切る
                 while (newCandidates.size > 24) {
                     newCandidates.removeAt(newCandidates.size - 1)
                     newReadings.removeAt(newReadings.size - 1)

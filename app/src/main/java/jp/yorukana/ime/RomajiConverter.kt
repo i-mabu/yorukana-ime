@@ -52,7 +52,8 @@ object RomajiConverter {
         put("mya", "みゃ"); put("myu", "みゅ"); put("myo", "みょ")
         put("rya", "りゃ"); put("ryu", "りゅ"); put("ryo", "りょ")
         put("dya", "ぢゃ"); put("dyu", "ぢゅ"); put("dyo", "ぢょ")
-        // 外来音 (SPEC準拠: ti/di は てぃ/でぃ。ち/ぢ は chi/di(旧) ではなく chi / dya系で入力)
+        // 外来音 (SPEC準拠: ti/di は てぃ/でぃ で、di は ぢ ではない。
+        // ち は chi、ぢ は dya 系 (dya/dyu/dyo) で入力する)
         put("fa", "ふぁ"); put("fi", "ふぃ"); put("fe", "ふぇ"); put("fo", "ふぉ"); put("fyu", "ふゅ")
         put("ti", "てぃ"); put("di", "でぃ")
         put("wi", "うぃ"); put("we", "うぇ")

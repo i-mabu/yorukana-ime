@@ -35,6 +35,7 @@ class UserDictionary {
         return if (words != null) ArrayList(words) else ArrayList()
     }
 
+    // よみに登録があるか
     fun has(reading: String): Boolean {
         return map.containsKey(reading)
     }
@@ -57,6 +58,7 @@ class UserDictionary {
         return n
     }
 
+    // 全登録を消す
     fun clear() {
         map.clear()
     }

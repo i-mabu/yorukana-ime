@@ -24,6 +24,7 @@ class Dictionary {
         if (!list.contains(candidate)) list.add(candidate)
     }
 
+    // データ形式の区切り (= / |) が無い壊れたエントリは、各ループで読み飛ばす
     private fun build() {
         for (e in DictionaryData.ENTRIES) {
             val eq = e.indexOf('=')
@@ -92,8 +93,8 @@ class Dictionary {
         val rs = reading.substring(0, reading.length - 1)
         val ks = kanji.substring(0, kanji.length - 1)
         add(reading, kanji)                                    // 辞書形
-        add(rs + "ます", ks + "ます")
-        add(rs + "ました", ks + "ました")
+        add(rs + "ます", ks + "ます")                          // ます形
+        add(rs + "ました", ks + "ました")                      // ました
         add(rs + "た", ks + "た")                              // た形
         add(rs + "て", ks + "て")                              // て形
         add(rs + "ない", ks + "ない")                          // ない形

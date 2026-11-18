@@ -8,7 +8,7 @@ Android用オリジナル日本語IME。完全オフライン・ネットワー�
 - minSdk 26 / targetSdk 34、Kotlin、UI は Jetpack Compose (1.7.6 / Material3)、
   Gradle/AGPを使わない手動ビルド
 
-## 設計原則（手動型）
+## 🎯 設計原則（手動型）
 
 yorukana は「自動で変換しない・自動で判定しない」手動型の IME です。全実装共通の原則:
 
@@ -20,9 +20,9 @@ yorukana は「自動で変換しない・自動で判定しない」手動型�
 
 詳しくは [MANUAL-INPUT-DESIGN.md](MANUAL-INPUT-DESIGN.md) を参照してください。
 
-## 機能
+## ✨ 機能
 
-### 入力方式（4種、モード切替キーで循環）
+### ⌨️ 入力方式（4種、モード切替キーで循環）
 1. **ローマ字入力（QWERTY）**: ローマ字→ひらがな変換しながら composing 表示。
    促音（子音重ね・xtu/ltu・xtsu/ltsu・tch）、撥音 n（nn / n' 対応、後続が母音なら な行）、
    拗音（kya/sha/cha/ja 等）、外来音（fa/fi/fe/fo、ti→てぃ、di→でぃ、wi/we 等）、
@@ -69,7 +69,7 @@ yorukana は「自動で変換しない・自動で判定しない」手動型�
 
 トグル打ちはタップ回数で段が循環（あ→い→う→え→お、や行は や→ゆ→よ、わ行は わ→を→ん→ー→〜）。
 
-### 変換エンジン
+### 🔄 変換エンジン
 - 候補順: ⓪ユーザー辞書（最優先） ①辞書の漢字候補（学習頻度でソート）
   ②カタカナ ③ひらがな原文 ④ローマ字原文（重複排除）。
 - 予測候補: 前方一致する辞書語を候補バーの後ろに表示。
@@ -82,7 +82,7 @@ yorukana は「自動で変換しない・自動で判定しない」手動型�
 - 末尾助詞（は/が/を/に/へ/と/の/も/か/ね/よ）の簡易分離変換
   （例: 「がっこうは」→「学校は」）。
 
-### 操作
+### 🎮 操作
 - 候補バー（横スクロール）: タップで確定。スペース/変換キーで候補ハイライトを順送り。
   右端にカーソルキー ◀ ▶ を固定配置（InputConnection へ DPAD 左右を送信）。
 - Enter: ハイライト中は候補を確定、composing 中はそのまま確定、それ以外は入力先の
@@ -94,12 +94,12 @@ yorukana は「自動で変換しない・自動で判定しない」手動型�
   バイブ ON/OFF、既定の入力方式、かな入力方式（フリック/トグル）、
   ユーザー辞書の登録・削除、学習リセット。
 
-## 使い方（有効化手順）
+## 📖 使い方（有効化手順）
 1. APK をインストールし、アプリ「よるかな IME」を開く。
 2. 「入力方法の設定を開く」から「よるかな IME」を有効化する。
 3. 文字入力画面でキーボード切替から「よるかな IME」を選ぶ。
 
-## ビルド方法
+## 🔨 ビルド方法
 前提: JDK 21（`~/workspace/tools/jdk-21`）、Kotlin コンパイラ 2.0.21
 （`~/workspace/tools/kotlin`。Compose コンパイラプラグインはコンパイラの
 バージョンと完全一致が必須のため、本体ビルドは 2.0.21 を使う。
@@ -149,7 +149,7 @@ v1.2.0 からアプリ本体は Kotlin です。v1.3.0 で UI を Jetpack Compos
 ~/workspace/tools/android/sdk/build-tools/34.0.0/apksigner verify dist/yorukana.apk
 ```
 
-## テスト
+## 🧪 テスト
 純ロジック（RomajiConverter / KanaUtils / Dictionary / ConversionEngine /
 FlickResolver / UserDictionary）の単体テスト。
 
@@ -158,14 +158,14 @@ FlickResolver / UserDictionary）の単体テスト。
                       # Java 相互運用 (@JvmStatic / @JvmField) 経由で実行、全255件
 ```
 
-## プライバシー
+## 🔒 プライバシー
 - **ネットワーク権限なし**（INTERNET 未宣言）。宣言している権限は
   VIBRATE（キータップ時のバイブレーション）のみです。
   入力内容を外部に送信することは一切ありません。
 - 学習データとユーザー辞書は端末内の SharedPreferences にのみ保存され、
   設定画面からいつでもリセット・削除できます。
 
-## 既知の制限（正直なところ）
+## ⚠️ 既知の制限（正直なところ）
 - **文節変換は簡易版**: 単一文節（全体変換）のみ。複数文節への分割や
   文脈を考慮した変換はしません（末尾助詞の分離のみ対応）。
 - 辞書は内蔵の日常語中心（約3,500読み）で、固有名詞・専門用語は少なめです。
@@ -175,7 +175,7 @@ FlickResolver / UserDictionary）の単体テスト。
 - 音声入力、手書き入力はありません。
 - 署名は debug keystore です（配布用ではありません）。
 
-## 未検証事項
+## 🔍 未検証事項
 - **実機検証は未実施**です。本環境（Linux VM）ではビルド・署名・aapt2 検証と
   純ロジックの単体テストまでを確認しています。実機での有効化・入力動作・
   各アプリとの相性は未確認です。
@@ -191,7 +191,7 @@ FlickResolver / UserDictionary）の単体テスト。
   匿名内部クラスのクラスファイルで NPE を起こすため）。削除リピート用
   Runnable は引き続き static 内部クラスで実装しています。
 
-## 構成
+## 🗂️ 構成
 ```
 app/src/main/java/jp/yorukana/ime/
   YoruKanaService.kt    IME本体 (InputMethodService、Compose UI をホスト)
@@ -211,7 +211,7 @@ tools/                    依存解決スクリプト + Compose コンパイラ�
 build-apk.sh              手動ビルドスクリプト
 ```
 
-## バージョン履歴
+## 📜 バージョン履歴
 - **v1.3.0 (versionCode 11)**: UI を Jetpack Compose に移行。
   設定画面は ComponentActivity + Compose (Material3、夜/昼テーマは設定と
   連動して即時切替)。キーボードは InputMethodService に ComposeView を

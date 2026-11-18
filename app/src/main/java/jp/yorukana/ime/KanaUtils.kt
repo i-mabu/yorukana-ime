@@ -109,7 +109,7 @@ object KanaUtils {
         return -1
     }
 
-    // 行内での次の文字 (末尾なら先頭へ)
+    // 行内での次の文字 (末尾なら先頭へ。current が行に無い文字なら先頭を返す)
     @JvmStatic
     fun nextInRow(row: Int, current: Char): Char {
         val r = TOGGLE_ROWS[row]

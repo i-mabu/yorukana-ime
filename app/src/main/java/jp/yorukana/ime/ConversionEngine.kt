@@ -15,10 +15,6 @@ class ConversionEngine(
     // ユーザー辞書を差し替える (IME 側が入力開始時に読み込むため)
     var userDictionary: UserDictionary? = userDictionary
 
-    fun dictionary(): Dictionary {
-        return dictionary
-    }
-
     // 学習頻度が高い順に安定ソート
     private fun sortByFreq(reading: String, cands: List<String>): List<String> {
         val out = ArrayList(cands)

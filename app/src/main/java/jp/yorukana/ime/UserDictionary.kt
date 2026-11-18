@@ -58,11 +58,6 @@ class UserDictionary {
         return n
     }
 
-    // 全登録を消す
-    fun clear() {
-        map.clear()
-    }
-
     // ----- 1.1 永続化形式 ("よみ\t単語" を改行で連結) -----
     fun encode(): String {
         val sb = StringBuilder()

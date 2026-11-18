@@ -21,11 +21,6 @@ open class MemoryLearningStore : LearningStore {
         freq.clear()
     }
 
-    // 内部の頻度マップをそのまま返す (内容確認用)
-    fun rawMap(): Map<String, Int> {
-        return freq
-    }
-
     companion object {
         const val SEP = "\u0001"
 

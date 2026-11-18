@@ -75,7 +75,11 @@ def parse_pom(g, a, v, depth=0):
     myver = ver_el.text.strip() if ver_el is not None else v
     props["project.version"] = myver
     props["pom.version"] = myver
-    # parent: merge depMgmt + props
+    # parent: プロパティだけを取り込む。親 POM の dependencyManagement は
+    # 取り込まない (再帰呼び出しの戻り値にも含まれない) ため、バージョンが
+    # 親の depMgmt でのみ管理されている依存はここでは解決できず、
+    # 下のループで dv=None となり脱落する。現行の Compose 依存セットでは
+    # このケースは発生していない。
     dep_mgmt = {}
     parent = root.find("m:parent", NS)
     if parent is not None and depth < 4:
@@ -83,7 +87,6 @@ def parse_pom(g, a, v, depth=0):
         pprops, _, _ = parse_pom(pg, pa, pv, depth + 1)
         for k, val in pprops.items():
             props.setdefault(k, val)
-        # parent depMgmt needs separate parse; handled below via recursion return
     dm = root.find("m:dependencyManagement/m:dependencies", NS)
     if dm is not None:
         for d in dm.findall("m:dependency", NS):

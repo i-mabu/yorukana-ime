@@ -183,7 +183,7 @@ public class TestMain {
     // ----- 1.3 Dictionary / ConversionEngine -----
     private static void testDictionaryAndEngine() {
         Dictionary dict = new Dictionary();
-        check(dict.size() >= 600, "dictionary size >= 600 (actual=" + dict.size() + ")");
+        check(dict.size() == 3408, "dictionary size == 3408 (actual=" + dict.size() + ")");
         check(dict.lookup("がっこう").contains("学校"), "dict gakkou -> 学校");
         check(dict.lookup("せんせい").contains("先生"), "dict sensei -> 先生");
         check(dict.lookup("かいた").contains("書いた"), "dict godan ta-form kaita");

@@ -116,7 +116,6 @@ class YoruKanaService : InputMethodService(), LifecycleOwner, ViewModelStoreOwne
     private val cBarBg: Color get() = Color(colBarBg)
 
     // ----- 1.3 状態 -----
-    private var dictionary: Dictionary? = null
     private var learning: PrefsLearningStore? = null
     private var engine: ConversionEngine? = null
     private var prefs: SharedPreferences? = null
@@ -246,7 +245,6 @@ class YoruKanaService : InputMethodService(), LifecycleOwner, ViewModelStoreOwne
         val p = getSharedPreferences(PREFS, Context.MODE_PRIVATE)
         prefs = p
         val dict = Dictionary()
-        dictionary = dict
         val store = PrefsLearningStore(p)
         learning = store
         engine = ConversionEngine(dict, store)

@@ -71,7 +71,6 @@ class Dictionary {
         add(rs + row[0] + "ます", ks + row[0] + "ます")        // ます形
         add(rs + row[0] + "ました", ks + row[0] + "ました")    // ました
         add(rs + row[0] + "たい", ks + row[0] + "たい")        // たい
-        add(rs + row[0] + "た", ks + row[0] + "た")            // 連用 (た の前段)
         val taR: String
         val teR: String
         val taK: String

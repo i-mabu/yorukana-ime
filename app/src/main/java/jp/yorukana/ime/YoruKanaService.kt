@@ -875,9 +875,11 @@ class YoruKanaService : InputMethodService(), LifecycleOwner, ViewModelStoreOwne
     // 全行で一致させる。両端のユーティリティ列は細く、中央3列の
     // かなキーが主役の標準的な配分。高さ58dp / かなキー 22sp は共通。
     // 行1: 記 あ か さ ⌫ / 行2: ◀ た な は ▶ /
-    // 行3: 123/カナ ま や ら 変換 / 行4: モード ゛゜小/😊 わ 、。？！ ⏎
-    // 行3左と行4の2番目は Simeji と同じ文脈キー: 未確定文字列が
-    // 無ければ 123 / 😊、あれば カナ (カタカナ変換) / ゛゜小 になる。
+    // 行3: 123/カナ ま や ら ⏎ / 行4: あA 顔文字/゛゜小 わ 、。？！ 変換
+    // 変換と改行の位置、あA キー、顔文字キーは、ユーザーが提示した
+    // Simeji との比較表 (2026-11-18) に合わせたもの。
+    // 行3左と行4の2番目は文脈キー: 未確定文字列が無ければ
+    // 123 / 顔文字、あれば カナ (カタカナ変換) / ゛゜小 になる。
     @Composable
     private fun KanaKeys() {
         val composingNow = currentDisplay.isNotEmpty()
@@ -902,10 +904,9 @@ class YoruKanaService : InputMethodService(), LifecycleOwner, ViewModelStoreOwne
             CursorKey(false, "▶", 0.75f, KANA_KEY_HEIGHT_DP)
         }
 
-        // 行3: [123/カナ] ま や ら [変換/スペース] (Simeji と同じ配置。
+        // 行3: [123/カナ] ま や ら [⏎] (右端は改行/確定キー。
         // 左は文脈キー: 未確定なし→「123」で数字カテゴリへ、
-        // 未確定あり→「カナ」で未確定文字列をカタカナに変換する。
-        // 右の変換キーは従来通り: 未確定あり→候補送り、なし→全角スペース)
+        // 未確定あり→「カナ」で未確定文字列をカタカナに変換する)
         Row(modifier = Modifier.fillMaxWidth()) {
             ClickKey(
                 if (composingNow) "カナ" else "123",
@@ -921,27 +922,32 @@ class YoruKanaService : InputMethodService(), LifecycleOwner, ViewModelStoreOwne
             KanaKey(6)
             KanaKey(7)
             KanaKey(8)
-            SpaceKey(0.75f, KANA_KEY_HEIGHT_DP)
+            ClickKey("⏎", 0.75f, true, 20, KANA_KEY_HEIGHT_DP) { onEnter() }
         }
 
-        // 行4: [モード] [゛゜小/😊] わ [、。？！] [⏎] (Simeji と同じ並び。
-        // 2番目は文脈キー: 未確定あり→゛゜小、なし→絵文字パネルへ)
+        // 行4: [あA] [顔文字/゛゜小] わ [、。？！] [変換]
+        // あA は英数モードへの直接切替 (Simeji と同じ)。
+        // 2番目は文脈キー: 未確定あり→゛゜小、なし→顔文字パネルへ。
+        // 右端の変換キーは従来の変換キーと同じ動作
+        // (未確定あり→候補送り、なし→全角スペース)。
         Row(modifier = Modifier.fillMaxWidth()) {
-            ModeKey(0.75f, KANA_KEY_HEIGHT_DP)
+            ClickKey("あA", 0.75f, true, 14, KANA_KEY_HEIGHT_DP) {
+                switchMode(MODE_EN)
+            }
             ClickKey(
-                if (composingNow) "゛゜小" else "😊",
-                1f, true, if (composingNow) 13 else 17, KANA_KEY_HEIGHT_DP,
+                if (composingNow) "゛゜小" else "顔文字",
+                1f, true, if (composingNow) 13 else 14, KANA_KEY_HEIGHT_DP,
             ) {
                 if (currentDisplay.isNotEmpty()) {
                     onDakutenKey()
                 } else {
-                    symbolPage = SYMBOL_PAGE_EMOJI
+                    symbolPage = SYMBOL_PAGE_KAOMOJI
                     switchMode(MODE_SYMBOL)
                 }
             }
             KanaKey(9) // わ
             ClickKey("、。？！", 1f, true, 14, KANA_KEY_HEIGHT_DP) { onPunctCycleKey() }
-            ClickKey("⏎", 0.75f, true, 20, KANA_KEY_HEIGHT_DP) { onEnter() }
+            SpaceKey(0.75f, KANA_KEY_HEIGHT_DP)
         }
     }
 
@@ -1080,7 +1086,7 @@ class YoruKanaService : InputMethodService(), LifecycleOwner, ViewModelStoreOwne
     // ----- 3.6 記号グリッド (カテゴリタブ式) -----
     @Composable
     private fun SymbolKeys() {
-        // カテゴリタブ (Simeji 準拠: 常用/カッコ/図形/数字/絵文字)。
+        // カテゴリタブ (Simeji 準拠: 常用/カッコ/図形/数字/顔文字/絵文字)。
         // 横スクロールで全カテゴリに届く。選択中タブが special 色になる。
         Row(
             modifier = Modifier
@@ -1113,13 +1119,18 @@ class YoruKanaService : InputMethodService(), LifecycleOwner, ViewModelStoreOwne
         val items = SYMBOL_CATEGORY_ITEMS[page]
         val cols = SYMBOL_CATEGORY_COLS[page]
         val emoji = page == SYMBOL_PAGE_EMOJI
+        val itemTextSize = when {
+            emoji -> 17
+            page == SYMBOL_PAGE_KAOMOJI -> 12
+            else -> 15
+        }
         var i = 0
         while (i < items.size) {
             val end = minOf(i + cols, items.size)
             Row(modifier = Modifier.fillMaxWidth()) {
                 for (j in i until end) {
                     val s = items[j]
-                    ClickKey(s, 1f, false, if (emoji) 17 else 15) { commitPunct(s) }
+                    ClickKey(s, 1f, false, itemTextSize) { commitPunct(s) }
                 }
                 // 最終行が列数に満たない場合は透明スペーサーで埋め、
                 // キーの幅・高さが他行と揃うようにする
@@ -1718,12 +1729,13 @@ class YoruKanaService : InputMethodService(), LifecycleOwner, ViewModelStoreOwne
         // ページ番号は SYMBOL_PAGE_* と対応する。旧来の記号72件は
         // すべて、どれかのカテゴリに含まれている。
         private val SYMBOL_CATEGORY_NAMES: Array<String> = arrayOf(
-            "常用", "カッコ", "図形", "数字", "絵文字",
+            "常用", "カッコ", "図形", "数字", "顔文字", "絵文字",
         )
 
         private const val SYMBOL_PAGE_COMMON = 0
         private const val SYMBOL_PAGE_NUMBER = 3
-        private const val SYMBOL_PAGE_EMOJI = 4
+        private const val SYMBOL_PAGE_KAOMOJI = 4
+        private const val SYMBOL_PAGE_EMOJI = 5
 
         private val COMMON_SYMBOLS: Array<String> = arrayOf(
             "、", "。", "！", "？", "・", "：", "；", "＠", "＃", "％",
@@ -1747,6 +1759,16 @@ class YoruKanaService : InputMethodService(), LifecycleOwner, ViewModelStoreOwne
             "￥", "＄", "€", "＋", "－", "＝", "＜", "＞", "％",
         )
 
+        // 顔文字 (タップで直接コミット)。横幅があるため 3 列で表示する。
+        private val KAOMOJIS: Array<String> = arrayOf(
+            "(・∀・)", "(´∀｀)", "(´ω｀)",
+            "(＾ω＾)", "(´・ω・`)", "(ﾟ∀ﾟ)",
+            "(≧▽≦)", "(´；ω；`)", "(；´Д｀)",
+            "(´Д｀)", "(ﾟДﾟ)", "(´ε｀)",
+            "(・_・)", "(；∀；)", "(´▽｀)",
+            "( ˘ω˘)", "(´_ゝ`)", "(・ω・)",
+        )
+
         // よく使う絵文字 約60個 (タップで直接コミット)
         private val EMOJIS: Array<String> = arrayOf(
             "😀", "😁", "😂", "🤣", "😊", "😍", "😘", "😎",
@@ -1761,10 +1783,11 @@ class YoruKanaService : InputMethodService(), LifecycleOwner, ViewModelStoreOwne
 
         // カテゴリ別の表示対象と列数 (SYMBOL_CATEGORY_NAMES と同じ順)
         private val SYMBOL_CATEGORY_ITEMS: Array<Array<String>> = arrayOf(
-            COMMON_SYMBOLS, BRACKET_SYMBOLS, SHAPE_SYMBOLS, NUMBER_SYMBOLS, EMOJIS,
+            COMMON_SYMBOLS, BRACKET_SYMBOLS, SHAPE_SYMBOLS, NUMBER_SYMBOLS,
+            KAOMOJIS, EMOJIS,
         )
 
-        private val SYMBOL_CATEGORY_COLS: IntArray = intArrayOf(10, 10, 10, 10, 8)
+        private val SYMBOL_CATEGORY_COLS: IntArray = intArrayOf(10, 10, 10, 10, 3, 8)
 
         // ----- 6.3 パスワード欄判定 -----
         // 入力先がパスワード系フィールドかどうか (クラス別に variation を見る)

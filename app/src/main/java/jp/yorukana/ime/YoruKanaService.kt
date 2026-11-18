@@ -586,15 +586,17 @@ class YoruKanaService : InputMethodService(), LifecycleOwner, ViewModelStoreOwne
     // キー同士の隙間はタッチ領域の内側 (背景のインセット) で描く。
     // タッチ判定は外側の Box 全面に付くため、隙間はデッドゾーンにならない
     // (View 時代の InsetDrawable 方式と同じ)。
+    // 隙間 3dp・角丸 10dp で、キーが独立したボタンとして並ぶ見た目にする
+    // (Simeji のボタン配置に寄せたもの。ユーザーの指摘 2026-11-18)。
     @Composable
     private fun KeyVisual(label: String, textSizeSp: Int, special: Boolean) {
         Box(
             modifier = Modifier
                 .fillMaxSize()
-                .padding(horizontal = 1.dp, vertical = 2.dp)
+                .padding(horizontal = 3.dp, vertical = 3.dp)
                 .background(
                     if (special) cSpecial else cKey,
-                    RoundedCornerShape(6.dp),
+                    RoundedCornerShape(10.dp),
                 ),
             contentAlignment = Alignment.Center,
         ) {
@@ -885,7 +887,7 @@ class YoruKanaService : InputMethodService(), LifecycleOwner, ViewModelStoreOwne
         val composingNow = currentDisplay.isNotEmpty()
         // 行1: [記] あ か さ [⌫]
         Row(modifier = Modifier.fillMaxWidth()) {
-            ClickKey("記", 0.75f, true, 15, KANA_KEY_HEIGHT_DP) {
+            ClickKey("記号", 0.75f, true, 14, KANA_KEY_HEIGHT_DP) {
                 symbolPage = SYMBOL_PAGE_COMMON
                 switchMode(MODE_SYMBOL)
             }
@@ -897,11 +899,11 @@ class YoruKanaService : InputMethodService(), LifecycleOwner, ViewModelStoreOwne
 
         // 行2: [◀] た な は [▶]
         Row(modifier = Modifier.fillMaxWidth()) {
-            CursorKey(true, "◀", 0.75f, KANA_KEY_HEIGHT_DP)
+            CursorKey(true, "←", 0.75f, KANA_KEY_HEIGHT_DP)
             KanaKey(3)
             KanaKey(4)
             KanaKey(5)
-            CursorKey(false, "▶", 0.75f, KANA_KEY_HEIGHT_DP)
+            CursorKey(false, "→", 0.75f, KANA_KEY_HEIGHT_DP)
         }
 
         // 行3: [123/カナ] ま や ら [⏎] (右端は改行/確定キー。
@@ -985,7 +987,7 @@ class YoruKanaService : InputMethodService(), LifecycleOwner, ViewModelStoreOwne
     @Composable
     private fun EnFlickKeys() {
         Row(modifier = Modifier.fillMaxWidth()) {
-            ClickKey("記", 0.75f, true, 15, KANA_KEY_HEIGHT_DP) {
+            ClickKey("記号", 0.75f, true, 14, KANA_KEY_HEIGHT_DP) {
                 symbolPage = SYMBOL_PAGE_COMMON
                 switchMode(MODE_SYMBOL)
             }
@@ -995,11 +997,11 @@ class YoruKanaService : InputMethodService(), LifecycleOwner, ViewModelStoreOwne
             DeleteKey(0.75f, KANA_KEY_HEIGHT_DP)
         }
         Row(modifier = Modifier.fillMaxWidth()) {
-            CursorKey(true, "◀", 0.75f, KANA_KEY_HEIGHT_DP)
+            CursorKey(true, "←", 0.75f, KANA_KEY_HEIGHT_DP)
             EnFlickKey(3)
             EnFlickKey(4)
             EnFlickKey(5)
-            CursorKey(false, "▶", 0.75f, KANA_KEY_HEIGHT_DP)
+            CursorKey(false, "→", 0.75f, KANA_KEY_HEIGHT_DP)
         }
         Row(modifier = Modifier.fillMaxWidth()) {
             ClickKey("123", 0.75f, true, 14, KANA_KEY_HEIGHT_DP) {

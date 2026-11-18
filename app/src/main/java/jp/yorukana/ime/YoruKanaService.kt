@@ -866,14 +866,13 @@ class YoruKanaService : InputMethodService(), LifecycleOwner, ViewModelStoreOwne
     }
 
     // ----- 3.4 かな 12キー (フリック / トグル切替) -----
+    // 配列は Simeji の12キーに準拠する (ユーザーの指定 2026-11-18):
+    // ゛゜小 は行4 (モードの隣)、変換/スペース は行3の右端。
     // 全4行とも weight [0.75 / 1 / 1 / 1 / 0.75] で統一し、5列の境界を
-    // 全行で一致させる (ユーザーの指定 2026-11-18)。両端のユーティ
-    // リティ列は細く、中央3列のかなキーが主役の標準的な配分。
-    // 以前は行4だけ合計が異なり「わ」の列位置がずれていた。
-    // 高さ58dp / かなキー 22sp は共通。全4行:
+    // 全行で一致させる。両端のユーティリティ列は細く、中央3列の
+    // かなキーが主役の標準的な配分。高さ58dp / かなキー 22sp は共通。
     // 行1: 記 あ か さ ⌫ / 行2: ◀ た な は ▶ /
-    // 行3: 😊 ま や ら ゛゜小 / 行4: モード 、。？！ わ 変換 ⏎
-    // ゛゜小 はかなキーのすぐ右 (行3右列) に置き、打った直後に届きやすくする。
+    // 行3: 😊 ま や ら 変換 / 行4: モード ゛゜小 わ 、。？！ ⏎
     @Composable
     private fun KanaKeys() {
         // 行1: [記] あ か さ [⌫]
@@ -897,7 +896,8 @@ class YoruKanaService : InputMethodService(), LifecycleOwner, ViewModelStoreOwne
             CursorKey(false, "▶", 0.75f, KANA_KEY_HEIGHT_DP)
         }
 
-        // 行3: [😊] ま や ら [゛゜小] (濁点キーはかなキーのすぐ右に置く)
+        // 行3: [😊] ま や ら [変換/スペース] (Simeji と同じ右端配置。
+        // 動作は従来の変換キーと同じ: 未確定あり→候補送り、なし→全角スペース)
         Row(modifier = Modifier.fillMaxWidth()) {
             ClickKey("😊", 0.75f, true, 17, KANA_KEY_HEIGHT_DP) {
                 symbolPage = 1
@@ -906,15 +906,15 @@ class YoruKanaService : InputMethodService(), LifecycleOwner, ViewModelStoreOwne
             KanaKey(6)
             KanaKey(7)
             KanaKey(8)
-            ClickKey("゛゜小", 0.75f, true, 13, KANA_KEY_HEIGHT_DP) { onDakutenKey() }
+            SpaceKey(0.75f, KANA_KEY_HEIGHT_DP)
         }
 
-        // 行4: [モード] [、。？！] わ [変換] [⏎] (列境界を行1〜3と一致させる)
+        // 行4: [モード] [゛゜小] わ [、。？！] [⏎] (Simeji と同じ並び)
         Row(modifier = Modifier.fillMaxWidth()) {
             ModeKey(0.75f, KANA_KEY_HEIGHT_DP)
-            ClickKey("、。？！", 1f, true, 14, KANA_KEY_HEIGHT_DP) { onPunctCycleKey() }
+            ClickKey("゛゜小", 1f, true, 13, KANA_KEY_HEIGHT_DP) { onDakutenKey() }
             KanaKey(9) // わ
-            SpaceKey(1f, KANA_KEY_HEIGHT_DP)
+            ClickKey("、。？！", 1f, true, 14, KANA_KEY_HEIGHT_DP) { onPunctCycleKey() }
             ClickKey("⏎", 0.75f, true, 20, KANA_KEY_HEIGHT_DP) { onEnter() }
         }
     }

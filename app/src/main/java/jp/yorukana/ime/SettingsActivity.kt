@@ -95,6 +95,18 @@ class SettingsActivity : ComponentActivity() {
                         .padding(20.dp),
                 ) {
                     Text("よるかな IME 設定", fontSize = 22.sp)
+                    // インストール中のビルドをその場で確認できるよう、
+                    // バージョンをタイトル直下に常時表示する
+                    val versionLabel = remember {
+                        try {
+                            val info = packageManager.getPackageInfo(packageName, 0)
+                            "バージョン " + (info.versionName ?: "?") +
+                                " (" + info.longVersionCode + ")"
+                        } catch (e: Exception) {
+                            "バージョン不明"
+                        }
+                    }
+                    BodyText(versionLabel)
 
                     // ----- 1.2 有効化ガイド -----
                     SectionTitle("有効化の手順")

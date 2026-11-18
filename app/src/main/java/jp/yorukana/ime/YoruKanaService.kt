@@ -865,55 +865,55 @@ class YoruKanaService : InputMethodService(), LifecycleOwner, ViewModelStoreOwne
         }
     }
 
-    // ----- 3.4 かな 12キー (フリック / トグル切替、Gboard 方式の5列配置) -----
-    // 中央3列がかなキー (weight 1 / 高さ58dp / 22sp)、左右に細い
-    // ユーティリティ列 (weight 0.75) を置く。全4行:
+    // ----- 3.4 かな 12キー (フリック / トグル切替) -----
+    // 全4行とも weight 1 × 5 の均等な5列グリッドに揃える (ユーザーの
+    // 指定 2026-11-18)。列の境界が全行で一致し、縦にきれいに並ぶ。
+    // 高さ58dp / かなキー 22sp は共通。全4行:
     // 行1: 記 あ か さ ⌫ / 行2: ◀ た な は ▶ /
     // 行3: 😊 ま や ら ゛゜小 / 行4: モード 、。？！ わ 変換 ⏎
     // ゛゜小 はかなキーのすぐ右 (行3右列) に置き、打った直後に届きやすくする。
-    // 変換 は行4の広いキー (weight 1.35) にして押しやすくする。
     @Composable
     private fun KanaKeys() {
         // 行1: [記] あ か さ [⌫]
         Row(modifier = Modifier.fillMaxWidth()) {
-            ClickKey("記", 0.75f, true, 15, KANA_KEY_HEIGHT_DP) {
+            ClickKey("記", 1f, true, 15, KANA_KEY_HEIGHT_DP) {
                 symbolPage = 0
                 switchMode(MODE_SYMBOL)
             }
             KanaKey(0)
             KanaKey(1)
             KanaKey(2)
-            DeleteKey(0.75f, KANA_KEY_HEIGHT_DP)
+            DeleteKey(1f, KANA_KEY_HEIGHT_DP)
         }
 
         // 行2: [◀] た な は [▶]
         Row(modifier = Modifier.fillMaxWidth()) {
-            CursorKey(true, "◀", 0.75f, KANA_KEY_HEIGHT_DP)
+            CursorKey(true, "◀", 1f, KANA_KEY_HEIGHT_DP)
             KanaKey(3)
             KanaKey(4)
             KanaKey(5)
-            CursorKey(false, "▶", 0.75f, KANA_KEY_HEIGHT_DP)
+            CursorKey(false, "▶", 1f, KANA_KEY_HEIGHT_DP)
         }
 
         // 行3: [😊] ま や ら [゛゜小] (濁点キーはかなキーのすぐ右に置く)
         Row(modifier = Modifier.fillMaxWidth()) {
-            ClickKey("😊", 0.75f, true, 17, KANA_KEY_HEIGHT_DP) {
+            ClickKey("😊", 1f, true, 17, KANA_KEY_HEIGHT_DP) {
                 symbolPage = 1
                 switchMode(MODE_SYMBOL)
             }
             KanaKey(6)
             KanaKey(7)
             KanaKey(8)
-            ClickKey("゛゜小", 0.75f, true, 13, KANA_KEY_HEIGHT_DP) { onDakutenKey() }
+            ClickKey("゛゜小", 1f, true, 13, KANA_KEY_HEIGHT_DP) { onDakutenKey() }
         }
 
-        // 行4: [モード] [、。？！] わ [変換] [⏎] (変換は広くして押しやすく)
+        // 行4: [モード] [、。？！] わ [変換] [⏎]
         Row(modifier = Modifier.fillMaxWidth()) {
-            ModeKey(1.0f, KANA_KEY_HEIGHT_DP)
-            ClickKey("、。？！", 1.05f, true, 14, KANA_KEY_HEIGHT_DP) { onPunctCycleKey() }
+            ModeKey(1f, KANA_KEY_HEIGHT_DP)
+            ClickKey("、。？！", 1f, true, 14, KANA_KEY_HEIGHT_DP) { onPunctCycleKey() }
             KanaKey(9) // わ
-            SpaceKey(1.35f, KANA_KEY_HEIGHT_DP)
-            ClickKey("⏎", 1.0f, true, 20, KANA_KEY_HEIGHT_DP) { onEnter() }
+            SpaceKey(1f, KANA_KEY_HEIGHT_DP)
+            ClickKey("⏎", 1f, true, 20, KANA_KEY_HEIGHT_DP) { onEnter() }
         }
     }
 

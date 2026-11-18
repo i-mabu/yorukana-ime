@@ -305,3 +305,23 @@ build-apk.sh              手動ビルドスクリプト
   絵文字パネル（記号とタブ切替、60個）、ローマ字 QWERTY 最上段の長押し数字入力。
 - **v1.0 (versionCode 1)**: 初版。ローマ字/かなトグル/英数/記号の4方式、
   辞書3,501読み＋学習機能、夜/昼テーマ。
+
+## 👥 Contributors
+
+[![All Contributors](https://img.shields.io/badge/all_contributors-1-orange.svg?style=flat-square)](#contributors)
+
+<!-- ALL-CONTRIBUTORS-LIST:START - Do not remove or modify this section -->
+<!-- prettier-ignore-start -->
+<!-- markdownlint-disable -->
+<table>
+  <tbody>
+    <tr>
+      <td align="center" valign="top" width="14.28%"><a href="https://github.com/i-mabu"><img src="https://avatars.githubusercontent.com/u/356833989?v=4?s=100" width="100px;" alt="i-mabu"/><br /><sub><b>i-mabu</b></sub></a><br /><a href="https://github.com/i-mabu/yorukana-ime/commits?author=i-mabu" title="Code">💻</a></td>
+    </tr>
+  </tbody>
+</table>
+
+<!-- markdownlint-restore -->
+<!-- prettier-ignore-end -->
+
+<!-- ALL-CONTRIBUTORS-LIST:END -->

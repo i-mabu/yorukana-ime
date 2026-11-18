@@ -125,6 +125,10 @@ class YoruKanaService : InputMethodService(), LifecycleOwner, ViewModelStoreOwne
     // セーフティモード (起動クラッシュが連続した場合に段階的に機能を落とす)
     private var safetyMode: SafetyMode = SafetyMode.NORMAL
 
+    // 現在の入力ビュー (onStartInputView で階層へのオーナー付与を
+    // やり直すために保持する)
+    private var inputViewRef: View? = null
+
     // Compose が購読する状態はスナップショットステートにする
     private var night by mutableStateOf(true)
     private var flickMode by mutableStateOf(true)
@@ -395,6 +399,13 @@ class YoruKanaService : InputMethodService(), LifecycleOwner, ViewModelStoreOwne
         // テーマ・入力方式などの設定変更はスナップショットステート経由で
         // 自動的に再コンポジションされる (View 時代の buildKeyboard 相当)
         loadPrefs()
+        // 表示のたびに階層全体へのオーナー付与をやり直す (アタッチ時の
+        // リスナーと二重化し、親階層の差し替えに追随する)
+        val v = inputViewRef
+        if (v != null) {
+            tagViewTreeOwners(v)
+            v.post { tagViewTreeOwners(v) }
+        }
     }
 
     // フルスクリーン抽出モード (横向き・一部アプリで入力ビューが画面全体に
@@ -406,14 +417,52 @@ class YoruKanaService : InputMethodService(), LifecycleOwner, ViewModelStoreOwne
     override fun onCreateInputView(): View {
         loadPrefs()
         val composeView = ComposeView(this)
-        composeView.setViewTreeLifecycleOwner(this)
-        composeView.setViewTreeViewModelStoreOwner(this)
-        composeView.setViewTreeSavedStateRegistryOwner(this)
+        inputViewRef = composeView
+        tagViewTreeOwners(composeView)
         composeView.setContent { KeyboardUi() }
+        // アタッチされるたび (初回表示・再表示) に階層全体へ付け直す。
+        // フレームワークが入力ビューを IME ウィンドウへ組み込む際に
+        // 親階層が差し替わるため、作った直後だけでは足りない。
+        composeView.addOnAttachStateChangeListener(object : View.OnAttachStateChangeListener {
+            override fun onViewAttachedToWindow(v: View) {
+                tagViewTreeOwners(v)
+            }
+
+            override fun onViewDetachedFromWindow(v: View) {
+                // 何もしない (次回アタッチ時に付け直す)
+            }
+        })
         // 入力ビューを作れた = 起動完了。セーフティの起動失敗カウントを
         // ここでリセットする (作れる前に死んだ場合だけ次回に数える)
         SafetyNet.markStartupCompleted(this)
         return composeView
+    }
+
+    // 入力ビューからウィンドウのルート (decorView) までの全階層に
+    // ViewTree オーナーを付ける。実機 (AQUOS wish2) で、Compose が
+    // キーボード本体ではなく IME ウィンドウの親レイアウト
+    // (android:id/parentPanel) からオーナーを探しに行き、見つけられず
+    // IllegalStateException で即落ちする事象を確認した (セーフティの
+    // クラッシュ記録で特定)。本体だけに付けると端末側の探し方によって
+    // 届かないため、階層のどこから探しても見つかるようにする。
+    private fun tagViewTreeOwners(view: View) {
+        var current: View? = view
+        while (current != null) {
+            current.setViewTreeLifecycleOwner(this)
+            current.setViewTreeViewModelStoreOwner(this)
+            current.setViewTreeSavedStateRegistryOwner(this)
+            current = current.parent as? View
+        }
+        try {
+            val decor = window?.window?.decorView
+            if (decor != null) {
+                decor.setViewTreeLifecycleOwner(this)
+                decor.setViewTreeViewModelStoreOwner(this)
+                decor.setViewTreeSavedStateRegistryOwner(this)
+            }
+        } catch (e: Exception) {
+            // decorView が取れない環境では階層側の付与だけで続行する
+        }
     }
 
     // InputConnection へ DPAD 左右のキーイベントを送る

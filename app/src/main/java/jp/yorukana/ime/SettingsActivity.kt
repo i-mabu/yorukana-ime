@@ -307,6 +307,12 @@ class SettingsActivity : ComponentActivity() {
                         BodyText("最後のクラッシュ: $date")
                         BodyText("例外: ${parsed[1]}")
                         if (parsed[2].isNotEmpty()) BodyText("内容: ${parsed[2]}")
+                        // 詳細 (スレッド名とスタック先頭)。原因特定に使う
+                        Text(
+                            crashRecord ?: "",
+                            fontSize = 11.sp,
+                            modifier = Modifier.padding(top = 6.dp, bottom = 6.dp),
+                        )
                         Button(
                             onClick = {
                                 SafetyNet.clearCrashLog(context)

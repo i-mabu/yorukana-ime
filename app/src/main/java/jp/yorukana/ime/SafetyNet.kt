@@ -32,7 +32,7 @@ object SafetyNet {
         val previous = Thread.getDefaultUncaughtExceptionHandler()
         Thread.setDefaultUncaughtExceptionHandler { thread, error ->
             try {
-                recordCrash(error)
+                recordCrash(error, thread.name)
             } catch (e: Exception) {
                 // 記録の失敗で二次クラッシュさせない
             }
@@ -75,10 +75,11 @@ object SafetyNet {
     }
 
     // クラッシュを記録する (ハンドラから呼ばれる)
-    fun recordCrash(error: Throwable) {
+    fun recordCrash(error: Throwable, threadName: String = "") {
         val ctx = appContext ?: return
         val p = prefs(ctx)
-        val stackTop = error.stackTrace.take(10).joinToString("\n") { "  at $it" }
+        val frames = error.stackTrace.take(10).joinToString("\n") { "  at $it" }
+        val stackTop = if (threadName.isEmpty()) frames else "thread=$threadName\n$frames"
         val record = SafetyGuard.formatCrashRecord(
             System.currentTimeMillis(),
             error.javaClass.name,

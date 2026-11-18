@@ -2,6 +2,10 @@ name: CI
 
 # 軽量CI: 単一ジョブで単体テストとオフライン手動ビルド (build-apk.sh) を実行し、APKを検証する。
 # main への push / PR で実行し、ドキュメントだけの変更では実行しない。
+# コンパイラは2系統: 単体テストは 2.4.21、本体ビルドは Compose コンパイラプラグイン
+# 2.0.21 と一致する 2.0.21 (プラグインはコンパイラのバージョンと完全一致が必須)。
+# Compose 依存 (libs/) とツール jar (tools/*.jar) は gitignore 対象なので、
+# ビルド前に取得ステップで揃える。
 on:
   push:
     branches: [main]
@@ -24,7 +28,7 @@ jobs:
         with:
           distribution: temurin
           java-version: '21'
-      - name: Install Kotlin compiler 2.4.21
+      - name: Install Kotlin compiler 2.4.21 (unit tests)
         run: |
           curl -sL -o /tmp/kotlin-compiler.zip https://github.com/JetBrains/kotlin/releases/download/v2.4.21/kotlin-compiler-2.4.21.zip
           unzip -q /tmp/kotlin-compiler.zip -d "$RUNNER_TEMP/kotlin"
@@ -33,11 +37,22 @@ jobs:
         run: |
           chmod +x tests/run-tests.sh build-apk.sh
           ./tests/run-tests.sh
+      - name: Install Kotlin compiler 2.0.21 (app build, Compose)
+        run: |
+          curl -fsSL -o /tmp/kotlin-compiler-2.0.21.zip "https://github.com/JetBrains/kotlin/releases/download/v2.0.21/kotlin-compiler-2.0.21.zip"
+          unzip -q /tmp/kotlin-compiler-2.0.21.zip -d "$RUNNER_TEMP/kotlin-2.0.21"
+      - name: Fetch Compose dependencies and build tools
+        run: |
+          python3 tools/resolve.py
+          curl -fsSL -o tools/r8-8.7.18.jar "https://dl.google.com/dl/android/maven2/com/android/tools/r8/8.7.18/r8-8.7.18.jar"
+          curl -fsSL -o tools/kotlin-compose-compiler-plugin-2.0.21.jar "https://repo1.maven.org/maven2/org/jetbrains/kotlin/kotlin-compose-compiler-plugin/2.0.21/kotlin-compose-compiler-plugin-2.0.21.jar"
       - name: Install Android SDK packages
         run: |
           yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --licenses > /dev/null || true
           "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" "platforms;android-34" "build-tools;34.0.0"
       - name: Build APK (offline manual pipeline)
+        env:
+          KOTLIN_HOME: ${{ runner.temp }}/kotlin-2.0.21/kotlinc
         run: |
           ANDROID_SDK_ROOT="$ANDROID_HOME" ./build-apk.sh
       - name: Verify APK

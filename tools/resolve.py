@@ -128,6 +128,12 @@ def clean_version(v):
         v = v[1:-1].split(",")[0].strip()
     return v
 
+# 除外する成果物: collection-ktx:1.2.0 のクラスは collection-jvm:1.4.0 に統合済みで
+# 全クラスが重複する (両方を dex に入れると duplicate class で落ちる)。spike でも除外した
+EXCLUDES = {
+    ("androidx.collection", "collection-ktx"),
+}
+
 # Gradle-style highest-version pins for families that must stay coherent
 PINS = {
     ("androidx.lifecycle", "lifecycle-common"): "2.8.7",
@@ -172,6 +178,8 @@ while queue:
     for dg, da, dv, typ, scope, optional in deps:
         if optional or scope in ("test", "provided", "system", "import"):
             continue
+        if (dg, da) in EXCLUDES:
+            continue
         if (dg, da) in seen:
             continue
         seen[(dg, da)] = dv
@@ -198,3 +206,15 @@ for g, a, v, f in ok:
 print(f"\nMISSING {len(missing)}:")
 for m in missing:
     print(f"  {m}")
+
+# 1つでも欠けたら失敗させる (CI では取得ステップで落ち、後段の不可解な失敗にしない)。
+# 欠けがある場合は artifacts.txt を書かない (中途半端なリストでビルドが進まないように)
+if missing:
+    print(f"error: {len(missing)} artifact(s) could not be downloaded", file=sys.stderr)
+    sys.exit(1)
+
+# build-apk.sh が読む成果物リストを書き出す (解決順にファイル名を1行に1つ)
+with open(os.path.join(LIBS, "artifacts.txt"), "w") as f:
+    for _, _, _, fn in ok:
+        f.write(fn + "\n")
+print(f"wrote libs/artifacts.txt ({len(ok)} files)")

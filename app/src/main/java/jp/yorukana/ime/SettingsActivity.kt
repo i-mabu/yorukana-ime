@@ -50,6 +50,8 @@ class SettingsActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        // 設定画面側のクラッシュもセーフティに記録する
+        SafetyNet.install(this)
         val p = getSharedPreferences(YoruKanaService.PREFS, Context.MODE_PRIVATE)
         prefs = p
         setContent {
@@ -270,7 +272,55 @@ class SettingsActivity : ComponentActivity() {
                         modifier = Modifier.fillMaxWidth(),
                     ) { Text("学習データをリセット") }
 
-                    // ----- 1.9 プライバシー -----
+                    // ----- 1.9 セーフティ -----
+                    SectionTitle("セーフティ")
+                    var safetyMode by remember { mutableStateOf(SafetyNet.lastMode(context)) }
+                    var crashTotal by remember { mutableStateOf(SafetyNet.totalCrashes(context)) }
+                    var crashRecord by remember { mutableStateOf(SafetyNet.lastCrashRecord(context)) }
+                    BodyText(
+                        when (safetyMode) {
+                            SafetyMode.NORMAL -> "現在のモード: 通常"
+                            SafetyMode.SAFE -> "現在のモード: セーフモード（学習の保存・ユーザー辞書・バイブを停止中）"
+                            SafetyMode.MINIMAL -> "現在のモード: 最小モード（変換を停止し、直接入力のみ）"
+                        },
+                    )
+                    BodyText("起動直後のクラッシュが続くと、自動でモードが下がります。キーボードが正常に開けば通常モードに復帰します。")
+                    if (safetyMode != SafetyMode.NORMAL) {
+                        Button(
+                            onClick = {
+                                SafetyNet.reset(context)
+                                safetyMode = SafetyMode.NORMAL
+                                Toast.makeText(context, "セーフモードを解除しました", Toast.LENGTH_SHORT).show()
+                            },
+                            modifier = Modifier.fillMaxWidth(),
+                        ) { Text("セーフモードを解除する") }
+                    }
+                    val parsed = SafetyGuard.parseCrashRecord(crashRecord)
+                    if (parsed != null) {
+                        val date = try {
+                            java.text.SimpleDateFormat("yyyy/MM/dd HH:mm", java.util.Locale.JAPAN)
+                                .format(java.util.Date(parsed[0].toLong()))
+                        } catch (e: Exception) {
+                            parsed[0]
+                        }
+                        BodyText("クラッシュ回数: $crashTotal 回")
+                        BodyText("最後のクラッシュ: $date")
+                        BodyText("例外: ${parsed[1]}")
+                        if (parsed[2].isNotEmpty()) BodyText("内容: ${parsed[2]}")
+                        Button(
+                            onClick = {
+                                SafetyNet.clearCrashLog(context)
+                                crashTotal = 0
+                                crashRecord = null
+                                Toast.makeText(context, "クラッシュ記録を消去しました", Toast.LENGTH_SHORT).show()
+                            },
+                            modifier = Modifier.fillMaxWidth(),
+                        ) { Text("クラッシュ記録を消去") }
+                    } else {
+                        BodyText("クラッシュは記録されていません。")
+                    }
+
+                    // ----- 1.10 プライバシー -----
                     SectionTitle("プライバシー")
                     BodyText("よるかな IME はネットワーク権限を持たず、入力内容を外部に送信することは一切ありません。")
                 }

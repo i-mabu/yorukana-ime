@@ -4,6 +4,8 @@ import jp.yorukana.ime.FlickResolver;
 import jp.yorukana.ime.KanaUtils;
 import jp.yorukana.ime.MemoryLearningStore;
 import jp.yorukana.ime.RomajiConverter;
+import jp.yorukana.ime.SafetyGuard;
+import jp.yorukana.ime.SafetyMode;
 import jp.yorukana.ime.UserDictionary;
 
 import java.util.List;
@@ -33,6 +35,7 @@ public class TestMain {
         testDictionaryAndEngine();
         testFlickResolver();
         testUserDictionary();
+        testSafetyGuard();
         System.out.println("ALL TESTS PASSED: " + passed + " checks");
     }
 
@@ -402,5 +405,51 @@ public class TestMain {
         engine2.setUserDictionary(user);
         check(engine2.candidates("よるかな", null).get(0).equals("夜奏"),
             "engine setUserDictionary takes effect");
+    }
+
+    // ----- 1.6 SafetyGuard (セーフティ判定) -----
+    private static void testSafetyGuard() {
+        // モード判定: 0-1回は通常、2-3回はセーフ、4回以上は最小
+        check(SafetyGuard.modeFor(0) == SafetyMode.NORMAL, "safety mode 0 = NORMAL");
+        check(SafetyGuard.modeFor(1) == SafetyMode.NORMAL, "safety mode 1 = NORMAL");
+        check(SafetyGuard.modeFor(2) == SafetyMode.SAFE, "safety mode 2 = SAFE");
+        check(SafetyGuard.modeFor(3) == SafetyMode.SAFE, "safety mode 3 = SAFE");
+        check(SafetyGuard.modeFor(4) == SafetyMode.MINIMAL, "safety mode 4 = MINIMAL");
+        check(SafetyGuard.modeFor(10) == SafetyMode.MINIMAL, "safety mode 10 = MINIMAL");
+
+        // 起動開始時の失敗数: 前回が未完了なら +1、完了していれば据え置き
+        check(SafetyGuard.failuresAtLaunch(0, false) == 0, "safety failures fresh launch");
+        check(SafetyGuard.failuresAtLaunch(0, true) == 1, "safety failures after pending");
+        check(SafetyGuard.failuresAtLaunch(2, true) == 3, "safety failures accumulate");
+        check(SafetyGuard.failuresAtLaunch(3, false) == 3, "safety failures kept when completed");
+
+        // クラッシュ記録の整形と分解 (往復)
+        String record = SafetyGuard.formatCrashRecord(
+            1700000000000L, "java.lang.IllegalStateException", "boom",
+            "  at a.b(C.kt:1)");
+        String[] parsed = SafetyGuard.parseCrashRecord(record);
+        check(parsed != null, "safety record parse non-null");
+        eq(parsed[0], "1700000000000", "safety record time");
+        eq(parsed[1], "java.lang.IllegalStateException", "safety record class");
+        eq(parsed[2], "boom", "safety record message");
+
+        // メッセージが null でも記録でき、空文字として分解される
+        String[] parsedNull = SafetyGuard.parseCrashRecord(
+            SafetyGuard.formatCrashRecord(1L, "java.lang.Error", null, ""));
+        check(parsedNull != null && parsedNull[2].isEmpty(), "safety record null message");
+
+        // 長いメッセージは 200 文字に切り詰められる
+        StringBuilder longMsg = new StringBuilder();
+        for (int i = 0; i < 500; i++) longMsg.append('x');
+        String[] parsedLong = SafetyGuard.parseCrashRecord(
+            SafetyGuard.formatCrashRecord(1L, "E", longMsg.toString(), ""));
+        check(parsedLong != null && parsedLong[2].length() == 200,
+            "safety record message truncated to 200");
+
+        // 壊れた記録・空記録は null
+        check(SafetyGuard.parseCrashRecord(null) == null, "safety record null input");
+        check(SafetyGuard.parseCrashRecord("") == null, "safety record empty input");
+        check(SafetyGuard.parseCrashRecord("only-one-line") == null,
+            "safety record broken input");
     }
 }

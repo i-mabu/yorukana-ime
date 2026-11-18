@@ -116,10 +116,14 @@ class YoruKanaService : InputMethodService(), LifecycleOwner, ViewModelStoreOwne
     private val cBarBg: Color get() = Color(colBarBg)
 
     // ----- 1.3 状態 -----
-    private var learning: PrefsLearningStore? = null
+    private var learning: LearningStore? = null
+    private var prefsLearning: PrefsLearningStore? = null
     private var engine: ConversionEngine? = null
     private var prefs: SharedPreferences? = null
     private var vibrateOn = true
+
+    // セーフティモード (起動クラッシュが連続した場合に段階的に機能を落とす)
+    private var safetyMode: SafetyMode = SafetyMode.NORMAL
 
     // Compose が購読する状態はスナップショットステートにする
     private var night by mutableStateOf(true)
@@ -200,13 +204,19 @@ class YoruKanaService : InputMethodService(), LifecycleOwner, ViewModelStoreOwne
         }
 
         // SharedPreferences から頻度を読み直す。設定画面で学習リセットされた
-        // 場合など、外部から prefs が書き換わった内容を反映するために使う
+        // 場合など、外部から prefs が書き換わった内容を反映するために使う。
+        // 読み込みに失敗したら頻度は空にして続行する (学習は補助機能であり、
+        // ここで落ちて入力自体が使えなくなるのは本末転倒なため)。
         fun reload() {
-            freq.clear()
-            for ((key, value) in prefs.all) {
-                if (key.startsWith(FREQ_PREFIX) && value is Int) {
-                    freq[key.substring(FREQ_PREFIX.length)] = value
+            try {
+                freq.clear()
+                for ((key, value) in prefs.all) {
+                    if (key.startsWith(FREQ_PREFIX) && value is Int) {
+                        freq[key.substring(FREQ_PREFIX.length)] = value
+                    }
                 }
+            } catch (e: Exception) {
+                freq.clear()
             }
         }
 
@@ -218,7 +228,11 @@ class YoruKanaService : InputMethodService(), LifecycleOwner, ViewModelStoreOwne
             val k = key(reading, candidate)
             val v = getFrequency(reading, candidate) + 1
             freq[k] = v
-            prefs.edit().putInt(FREQ_PREFIX + k, v).apply()
+            try {
+                prefs.edit().putInt(FREQ_PREFIX + k, v).apply()
+            } catch (e: Exception) {
+                // 保存に失敗してもメモリ上の頻度は保ち、入力は止めない
+            }
         }
 
         override fun clear() {
@@ -238,22 +252,71 @@ class YoruKanaService : InputMethodService(), LifecycleOwner, ViewModelStoreOwne
     }
 
     // ===== 2. ライフサイクル =====
+    // 起動は段階ごとに失敗を閉じ込める: セーフティ記録 → 設定 → 学習 →
+    // 辞書/変換エンジン の順に初期化し、どこかで例外が出ても「入力できる
+    // 最小限の状態」で起動を完了させる。起動クラッシュが連続した場合は
+    // SafetyNet がモードを返し、危険な機能から順に無効化する。
     override fun onCreate() {
         super.onCreate()
+        // 最初に例外ハンドラと起動モードの判定を行う (これより後の
+        // 初期化で死んでも、次回起動時に検知できるようにするため)
+        SafetyNet.install(this)
+        safetyMode = try {
+            SafetyNet.beginLaunch(this)
+        } catch (e: Exception) {
+            SafetyMode.NORMAL
+        }
         savedStateRegistryController.performRestore(null)
+        lifecycleRegistry.currentState = Lifecycle.State.CREATED
+        lifecycleRegistry.currentState = Lifecycle.State.STARTED
         lifecycleRegistry.currentState = Lifecycle.State.RESUMED
-        val p = getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+
+        // 設定: ファイルが壊れていても既定値で起動を続ける
+        val p = try {
+            getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+        } catch (e: Exception) {
+            null
+        }
         prefs = p
-        val dict = Dictionary()
-        val store = PrefsLearningStore(p)
+
+        // 学習ストア: セーフモード以上では永続化をやめ、メモリ実装にする
+        // (設定ファイル起因のクラッシュを断ち切るため)
+        val persistent = if (safetyMode == SafetyMode.NORMAL && p != null) {
+            try {
+                PrefsLearningStore(p)
+            } catch (e: Exception) {
+                null
+            }
+        } else {
+            null
+        }
+        prefsLearning = persistent
+        val store: LearningStore = persistent ?: MemoryLearningStore()
         learning = store
-        engine = ConversionEngine(dict, store)
+
+        // 変換エンジン: 最小モードでは構築自体をしない (候補なしの直接
+        // 入力になる)。構築に失敗したら一度だけ作り直し、それでも
+        // 駄目なら変換なしで起動する。
+        engine = if (safetyMode == SafetyMode.MINIMAL) {
+            null
+        } else {
+            try {
+                ConversionEngine(Dictionary(), store)
+            } catch (e: Exception) {
+                try {
+                    ConversionEngine(Dictionary(), store)
+                } catch (e2: Exception) {
+                    null
+                }
+            }
+        }
     }
 
     private fun loadPrefs() {
         val p = prefs ?: return
         night = "day" != p.getString(KEY_THEME, "night")
-        vibrateOn = p.getBoolean(KEY_VIBRATE, true)
+        // セーフモード以上ではバイブレーションも止める (復旧優先)
+        vibrateOn = p.getBoolean(KEY_VIBRATE, true) && safetyMode == SafetyMode.NORMAL
         flickMode = "toggle" != p.getString(KEY_KANA_STYLE, "flick")
         if (night) {
             colRoot = AndroidColor.rgb(0x0B, 0x12, 0x26)
@@ -285,9 +348,19 @@ class YoruKanaService : InputMethodService(), LifecycleOwner, ViewModelStoreOwne
         caps = false
         symbolPage = 0
         // 学習頻度を設定画面側の変更 (リセット等) に追随させる
-        learning?.reload()
-        // ユーザー辞書は入力開始時に読み込む (設定画面での変更を反映するため)
-        userDictionary = UserDictionary.decode(p.getString(KEY_USER_DICT, ""))
+        prefsLearning?.reload()
+        // ユーザー辞書は入力開始時に読み込む (設定画面での変更を反映するため)。
+        // セーフモード以上では読み込まない。壊れたデータでも例外にせず、
+        // 空の辞書として扱う。
+        userDictionary = if (safetyMode == SafetyMode.NORMAL) {
+            try {
+                UserDictionary.decode(p.getString(KEY_USER_DICT, ""))
+            } catch (e: Exception) {
+                UserDictionary()
+            }
+        } else {
+            UserDictionary()
+        }
         engine?.userDictionary = userDictionary
 
         // 初期モード: subtype の extra value (mode=romaji / mode=kana) を最優先し、
@@ -337,6 +410,9 @@ class YoruKanaService : InputMethodService(), LifecycleOwner, ViewModelStoreOwne
         composeView.setViewTreeViewModelStoreOwner(this)
         composeView.setViewTreeSavedStateRegistryOwner(this)
         composeView.setContent { KeyboardUi() }
+        // 入力ビューを作れた = 起動完了。セーフティの起動失敗カウントを
+        // ここでリセットする (作れる前に死んだ場合だけ次回に数える)
+        SafetyNet.markStartupCompleted(this)
         return composeView
     }
 
@@ -1002,6 +1078,8 @@ class YoruKanaService : InputMethodService(), LifecycleOwner, ViewModelStoreOwne
     }
 
     private fun showFlickPreview(rowIdx: Int, coords: LayoutCoordinates) {
+        // 最小モードではプレビュー (オーバーレイ描画) を出さない
+        if (safetyMode == SafetyMode.MINIMAL) return
         val size = dp(FLICK_PREVIEW_SIZE_DP)
         val pos = coords.positionInRoot()
         val keyCx = (pos.x + coords.size.width / 2f).toInt()
@@ -1051,6 +1129,8 @@ class YoruKanaService : InputMethodService(), LifecycleOwner, ViewModelStoreOwne
     // 文字キーのキープレビューをキーの真上に表示する (画面端では内側に寄せ、
     // 上に置けない場合はキーの下に出す)
     private fun showKeyPreview(coords: LayoutCoordinates, text: String) {
+        // 最小モードではプレビュー (オーバーレイ描画) を出さない
+        if (safetyMode == SafetyMode.MINIMAL) return
         val size = dp(KEY_PREVIEW_SIZE_DP)
         val pos = coords.positionInRoot()
         val keyCx = (pos.x + coords.size.width / 2f).toInt()
@@ -1204,7 +1284,11 @@ class YoruKanaService : InputMethodService(), LifecycleOwner, ViewModelStoreOwne
             return
         }
         if (currentDisplay.isEmpty()) {
-            ic.finishComposingText()
+            try {
+                ic.finishComposingText()
+            } catch (e: Exception) {
+                // 接続が切れた等の例外でキー処理全体を落とさない
+            }
             candidates = emptyList()
             candidateReadings = emptyList()
         } else {
@@ -1223,7 +1307,11 @@ class YoruKanaService : InputMethodService(), LifecycleOwner, ViewModelStoreOwne
         } else {
             currentDisplay
         }
-        if (text.isEmpty()) ic.finishComposingText() else ic.setComposingText(text, 1)
+        try {
+            if (text.isEmpty()) ic.finishComposingText() else ic.setComposingText(text, 1)
+        } catch (e: Exception) {
+            // 入力先との接続が切れた等の例外でキー処理全体を落とさない
+        }
     }
 
     private fun refreshCandidates() {
@@ -1232,28 +1320,43 @@ class YoruKanaService : InputMethodService(), LifecycleOwner, ViewModelStoreOwne
         if (currentReading.isNotEmpty()) {
             val eng = engine
             if (eng != null) {
-                val raw = if (mode == MODE_ROMAJI) romajiBuf.toString() else null
-                for (c in eng.candidates(currentReading, raw)) {
-                    newCandidates.add(c)
-                    newReadings.add(currentReading)
-                }
-                // 予測候補を後ろに足す (重複排除)
-                for (e in eng.predictEntries(currentReading, 8)) {
-                    if (!newCandidates.contains(e[1])) {
-                        newCandidates.add(e[1])
-                        newReadings.add(e[0])
-                    }
-                }
-                // 候補は最大24件に絞る。candidateReadings は候補と同順・同数で
-                // 対応付けるため、末尾から一緒に切る
-                while (newCandidates.size > 24) {
-                    newCandidates.removeAt(newCandidates.size - 1)
-                    newReadings.removeAt(newReadings.size - 1)
+                try {
+                    fillCandidates(eng, newCandidates, newReadings)
+                } catch (e: Exception) {
+                    // 変換で例外が出たら候補なしにする (読みの表示と確定は
+                    // 候補なしでも動作するため、入力は継続できる)
+                    newCandidates.clear()
+                    newReadings.clear()
                 }
             }
         }
         candidates = newCandidates
         candidateReadings = newReadings
+    }
+
+    private fun fillCandidates(
+        eng: ConversionEngine,
+        newCandidates: ArrayList<String>,
+        newReadings: ArrayList<String>,
+    ) {
+        val raw = if (mode == MODE_ROMAJI) romajiBuf.toString() else null
+        for (c in eng.candidates(currentReading, raw)) {
+            newCandidates.add(c)
+            newReadings.add(currentReading)
+        }
+        // 予測候補を後ろに足す (重複排除)
+        for (e in eng.predictEntries(currentReading, 8)) {
+            if (!newCandidates.contains(e[1])) {
+                newCandidates.add(e[1])
+                newReadings.add(e[0])
+            }
+        }
+        // 候補は最大24件に絞る。candidateReadings は候補と同順・同数で
+        // 対応付けるため、末尾から一緒に切る
+        while (newCandidates.size > 24) {
+            newCandidates.removeAt(newCandidates.size - 1)
+            newReadings.removeAt(newReadings.size - 1)
+        }
     }
 
     private fun commitCandidate(idx: Int) {

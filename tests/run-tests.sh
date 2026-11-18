@@ -24,6 +24,7 @@ SRC=app/src/main/java/jp/yorukana/ime
   "$SRC/MemoryLearningStore.kt" \
   "$SRC/FlickResolver.kt" \
   "$SRC/UserDictionary.kt" \
+  "$SRC/SafetyGuard.kt" \
   "$SRC/ConversionEngine.kt"
 "$JAVAC" -encoding UTF-8 -cp "$OUT/classes:$STDLIB" -d "$OUT/test-classes" \
   tests/TestMain.java

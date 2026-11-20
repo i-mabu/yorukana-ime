@@ -1,4 +1,4 @@
-# よるかな IME (YoruKana) — 仕様（v1.3.0 時点）
+# よるかな IME (YoruKana) — 仕様（v1.4.5 時点）
 
 オリジナル日本語IME for Android。名前はユーザーの「終夜（夜）」の世界観から。
 完全オフライン・ネットワーク権限なしが売り。
@@ -6,7 +6,7 @@
 本書は現行実装のスナップショットであり、機能の詳細な使い方は README を正とする。
 
 - パッケージ: jp.yorukana.ime
-- versionName 1.3.0 / versionCode 11
+- versionName 1.4.5 / versionCode 22
 - minSdk 26 / targetSdk 34、Kotlin、UI は Jetpack Compose (1.7.6 / Material3)
 - Gradle/AGP を使わない手動ビルド（後述）。UI 以外の依存はなく、辞書・変換は純 Kotlin ロジック
 - JDK: ~/workspace/tools/jdk-21、Kotlin 2.0.21、SDK: ~/workspace/tools/android/sdk (build-tools 34.0.0)

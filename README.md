@@ -1,10 +1,10 @@
-# よるかな IME (YoruKana) v1.3.0
+# よるかな IME (YoruKana) v1.4.5
 
 Android用オリジナル日本語IME。完全オフライン・ネットワーク権限なし。
 名前は「終夜（よる）」の世界観から。夜テーマ（濃紺）を既定にした、育つIMEです。
 
 - パッケージ: `jp.yorukana.ime`
-- versionName 1.3.0 / versionCode 11
+- versionName 1.4.5 / versionCode 22
 - minSdk 26 / targetSdk 34、Kotlin、UI は Jetpack Compose (1.7.6 / Material3)、
   Gradle/AGPを使わない手動ビルド
 

@@ -1,0 +1,7 @@
+build/
+dist/
+*.apk
+*.keystore
+!debug.keystore
+libs/
+tools/*.jar
